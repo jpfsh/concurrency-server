@@ -14,82 +14,16 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <errno.h>
 
-// sigint_vallue to sigint_flag
-// change cleanupthreads name and maybe add parameter
-
-//Do not write printer or comparator functions for your linked list of ThreadIDs. You don’t need to print it and the order doesn’t matter at all.
-//Only use InsertAtHead to insert.
-//Write an empty function for the deleter that does nothing when called because remember, you’re storing the tid_t directly in the void* data of each node, there is nothing to delete.
-void emptyDeleter() {
-}
-
-typedef struct node {
-    void* data;          
-    struct node* next;   
-    struct node* prev;   
-} node_t;
-
-/*
- * Structure for the base linkedList
- * 
- * head - a pointer to the first node in the list. NULL if length is 0.
- * length - the current length of the linkedList. Must be initialized to 0.
- * comparator - function pointer to linkedList comparator. Must be initialized!
- */
-typedef struct list {
-    node_t* head;
-    int length;
-    /* the comparator uses the values of the nodes directly (i.e function has to be type aware) */
-    int (*comparator)(const void*, const void*);
-    void (*printer)(void*, void*);  // function pointer for printing the data stored
-    void (*deleter)(void*);              // function pointer for deleting any dynamically 
-                                         // allocated items within the data stored
-} dlist_t;
-
-dlist_t* CreateList(int (*compare)(const void*, const void*), void (*print)(void*, void*),
-                   void (*delete)(void*)) {
-    dlist_t* list = malloc(sizeof(dlist_t));
-    list->comparator = compare;
-    list->printer = print;
-    list->deleter = delete;
-    list->length = 0;
-    list->head = NULL;
-    return list;
-}
-
-void InsertAtHead(dlist_t* list, void* val_ref) {
-    if(list == NULL || val_ref == NULL)
-        return;
-    if (list->length == 0) list->head = NULL;
-
-    node_t** head = &(list->head);
-    node_t* new_node;
-    new_node = malloc(sizeof(node_t));
-
-    new_node->data = val_ref;
-    new_node->next = *head;
-    new_node->prev = NULL;
-
-    // moves list head to the new node
-    if(*head != NULL)
-        (*head)->prev = new_node;
-    *head = new_node;
-    list->length++;
-}
-
-/********************** DECLARE ALL LOCKS HERE BETWEEN THES LINES *************/
-pthread_mutex_t server_stats_lock = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t log_file_lock = PTHREAD_MUTEX_INITIALIZER;
-//pthread_mutex_t server_stats_lock;
+pthread_mutex_t server_stats_lock;
+pthread_mutex_t log_file_lock;
 pthread_mutex_t charity_locks[5];
-//pthread_mutex_t log_file_lock;
-pthread_mutex_t thread_list_lock;
-volatile sig_atomic_t sigint_flag = 1;
-/***********************************************************************************************/
 
 #define SA struct sockaddr
 #define USAGE_MSG_MT "ZotDonation_MTserver [-h] PORT_NUMBER LOG_FILENAME"
+
+int socket_listen_init(int server_port);
 
 // These are the message types for the protocol
 enum msg_types {
@@ -101,10 +35,43 @@ enum msg_types {
     ERROR = 0xFF
 };
 
+// Define constants
+#define CHARITY_COUNT 5
+#define MAX_DONATIONS 3
+#define MSG_SIZE 32
+
+// Declarations
+void emptyDeleter() {}
+
+// Node structure for linked list
+typedef struct node {
+    void* data;
+    struct node* next;
+    struct node* prev;
+} node_t;
+
+// Doubly linked list structure
+typedef struct list {
+    node_t* head;
+    int length;
+    int (*comparator)(const void*, const void*);
+    void (*printer)(void*, void*);
+    void (*deleter)(void*);
+} dlist_t;
+
+// Function prototypes
+dlist_t* CreateList(int (*compare)(const void*, const void*), void (*print)(void*, void*), void (*delete)(void*));
+void InsertAtHead(dlist_t* list, void* val_ref);
+
+// Global variables for server statistics
+int clientCnt = 0;
+uint64_t maxDonations[MAX_DONATIONS] = {0};
+
+// Charity structure
 typedef struct {
-    uint64_t totalDonationAmt; // Sum of donations made to charity by donors (clients)
-    uint64_t topDonation;      // Largest donation made to this charity
-    uint32_t numDonations;     // Count of donations made to charity
+    int numDonations;
+    uint64_t totalDonationAmt;
+    uint64_t topDonation;
 } charity_t;
 
 // This is the struct for each message sent to the server
@@ -119,63 +86,256 @@ typedef struct {
     } msgdata; 
 } message_t;
 
-charity_t charities[5];
-uint32_t clientCnt = 0;
-uint64_t maxDonations[3] = {0};
-FILE *log_file;
+// Global variables for other components
+charity_t charities[CHARITY_COUNT];
+dlist_t* thread_list;
+FILE* log_file;
+volatile sig_atomic_t sigint_flag = 0;
+// int server_fd;
 int listen_fd;
 
-typedef struct thread_node {
-    pthread_t thread_id;
-    struct thread_node *next;
-} thread_node_t;
+// Function definitions
+dlist_t* CreateList(int (*compare)(const void*, const void*), void (*print)(void*, void*), void (*delete)(void*)) {
+    dlist_t* list = malloc(sizeof(dlist_t));
+    list->comparator = compare;
+    list->printer = print;
+    list->deleter = delete;
+    list->length = 0;
+    list->head = NULL;
+    return list;
+}
 
-thread_node_t *thread_list_head = NULL;
-
-void sigint_handler(int sig);
-void *client_handler(void *client_fd_ptr);
-int socket_listen_init(int server_port);
-void cleanup_threads();
-
-int main(int argc, char *argv[]) {
-    if (argc < 3) {
-        fprintf(stderr, "%s\n", USAGE_MSG_MT);
-        exit(EXIT_FAILURE);
+void InsertAtHead(dlist_t* list, void* val_ref) {
+    if (list == NULL) return;
+    node_t* new_node = malloc(sizeof(node_t));
+    new_node->data = val_ref;
+    new_node->next = list->head;
+    new_node->prev = NULL;
+    if (list->head != NULL) {
+        list->head->prev = new_node;
     }
+    list->head = new_node;
+    list->length++;
+}
 
-    int port_number = atoi(argv[1]);
-    char *log_filename = argv[2];
+// Signal handler
+void sigint_handler(int signum) {
+    sigint_flag = 1;
+}
 
-    // Open log file
-    log_file = fopen(log_filename, "w");
-    if (log_file == NULL) {
-        perror("Failed to open log file");
-        exit(EXIT_FAILURE);
+// Initialize server resources
+void init_server_resources(const char* log_filename) {
+    // Initialize server statistics
+    clientCnt = 0;
+    for (int i = 0; i < MAX_DONATIONS; i++) {
+        maxDonations[i] = 0;
     }
-
-    // Initialize locks
     pthread_mutex_init(&server_stats_lock, NULL);
-    pthread_mutex_init(&log_file_lock, NULL);
-    pthread_mutex_init(&thread_list_lock, NULL);
-    for (int i = 0; i < 5; i++) {
+
+    // Initialize charities
+    for (int i = 0; i < CHARITY_COUNT; i++) {
+        charities[i].numDonations = 0;
+        charities[i].totalDonationAmt = 0;
+        charities[i].topDonation = 0;
         pthread_mutex_init(&charity_locks[i], NULL);
     }
 
-    // Initialize SIGINT handler
+    // Initialize log file
+    log_file = fopen(log_filename, "w");
+    pthread_mutex_init(&log_file_lock, NULL);
+
+    // Initialize thread list
+    thread_list = CreateList(NULL, NULL, emptyDeleter);
+}
+
+// Cleanup server resources
+void cleanup_server_resources() {
+    // Close log file
+    fclose(log_file);
+
+    // Destroy mutexes
+    pthread_mutex_destroy(&server_stats_lock);
+    for (int i = 0; i < CHARITY_COUNT; i++) {
+        pthread_mutex_destroy(&charity_locks[i]);
+    }
+    pthread_mutex_destroy(&log_file_lock);
+}
+
+// Thread function to handle client requests
+void* client_thread(void* arg) {
+    int client_fd = *(int*)arg;
+    free(arg);
+
+    message_t message;
+    uint64_t client_total_donations = 0;
+
+    while (read(client_fd, &message, sizeof(message_t)) > 0) {
+        switch (message.msgtype) {
+            case DONATE:
+                if (message.msgdata.donation.charity < 0 || message.msgdata.donation.charity >= 5) {
+                    // Invalid charity index, send error message
+                    message.msgtype = ERROR;
+                    pthread_mutex_lock(&log_file_lock);
+                    fprintf(log_file, "%d ERROR\n", client_fd);
+                    fflush(log_file);
+                    pthread_mutex_unlock(&log_file_lock);
+                    write(client_fd, &message, sizeof(message_t));
+                    continue;
+                }
+
+                pthread_mutex_lock(&charity_locks[message.msgdata.donation.charity]);
+                charities[message.msgdata.donation.charity].totalDonationAmt += message.msgdata.donation.amount;
+                if (message.msgdata.donation.amount > charities[message.msgdata.donation.charity].topDonation) {
+                    charities[message.msgdata.donation.charity].topDonation = message.msgdata.donation.amount;
+                }
+                charities[message.msgdata.donation.charity].numDonations++;
+                pthread_mutex_unlock(&charity_locks[message.msgdata.donation.charity]);
+
+                client_total_donations += message.msgdata.donation.amount;
+
+                pthread_mutex_lock(&log_file_lock);
+                fprintf(log_file, "%d DONATE %d %lu\n", client_fd, message.msgdata.donation.charity, message.msgdata.donation.amount);
+                fflush(log_file);
+                pthread_mutex_unlock(&log_file_lock);
+
+                write(client_fd, &message, sizeof(message_t));
+                break;
+
+
+            case CINFO:
+                if (message.msgdata.donation.charity < 0 || message.msgdata.donation.charity >= 5) {
+                    message.msgtype = ERROR;
+                    pthread_mutex_lock(&log_file_lock);
+                    fprintf(log_file, "%d ERROR\n", client_fd);
+                    fflush(log_file);
+                    pthread_mutex_unlock(&log_file_lock);
+                    write(client_fd, &message, sizeof(message_t));
+                    continue;
+                }
+
+                pthread_mutex_lock(&charity_locks[message.msgdata.donation.charity]);
+                message.msgdata.charityInfo = charities[message.msgdata.donation.charity];
+                pthread_mutex_unlock(&charity_locks[message.msgdata.donation.charity]);
+
+                pthread_mutex_lock(&log_file_lock);
+                fprintf(log_file, "%d CINFO %d\n", client_fd, message.msgdata.donation.charity);
+                fflush(log_file);
+                pthread_mutex_unlock(&log_file_lock);
+
+                write(client_fd, &message, sizeof(message_t));
+                break;
+
+            case TOP:
+                pthread_mutex_lock(&server_stats_lock);
+                for (int i = 0; i < MAX_DONATIONS; i++) {
+                    message.msgdata.maxDonations[i] = maxDonations[i];
+                }
+                pthread_mutex_unlock(&server_stats_lock);
+
+                pthread_mutex_lock(&log_file_lock);
+                fprintf(log_file, "%d TOP\n", client_fd);
+                fflush(log_file);
+                pthread_mutex_unlock(&log_file_lock);
+
+                write(client_fd, &message, sizeof(message_t));
+                break;
+
+            case LOGOUT:
+                pthread_mutex_lock(&log_file_lock);
+                fprintf(log_file, "%d LOGOUT\n", client_fd);
+                fflush(log_file);
+                pthread_mutex_unlock(&log_file_lock);
+
+                // Update maxDonations if necessary
+                pthread_mutex_lock(&server_stats_lock);
+                for (int i = 0; i < MAX_DONATIONS; i++) {
+                    if (client_total_donations > maxDonations[i]) {
+                        for (int j = MAX_DONATIONS - 1; j > i; j--) {
+                            maxDonations[j] = maxDonations[j - 1];
+                        }
+                        maxDonations[i] = client_total_donations;
+                        break;
+                    }
+                }
+                pthread_mutex_unlock(&server_stats_lock);
+
+                close(client_fd);
+                return NULL;
+            case STATS:
+            {
+                // Lock all charity locks to ensure consistent stats
+                for (int i = 0; i < CHARITY_COUNT; i++) {
+                    pthread_mutex_lock(&charity_locks[i]);
+                }
+
+                // Prepare the statistics message
+                message_t response;
+                response.msgtype = STATS;
+                for (int i = 0; i < CHARITY_COUNT; i++) {
+                    response.msgdata.stats.charityID_low = i;
+                    response.msgdata.stats.amount_low = charities[i].totalDonationAmt;
+                    // Send the stats for each charity
+                    write(client_fd, &response, sizeof(response));
+                    // Log the stats request
+                    pthread_mutex_lock(&log_file_lock);
+                    fprintf(log_file, "<%d> STATS %d:%llu\n", client_fd, i, (unsigned long long)charities[i].totalDonationAmt);
+                    pthread_mutex_unlock(&log_file_lock);
+                }
+
+                // Unlock all charity locks
+                for (int i = 0; i < CHARITY_COUNT; i++) {
+                    pthread_mutex_unlock(&charity_locks[i]);
+                }
+            }
+                break;
+            case ERROR:
+            {
+                // Prepare the error message
+                message_t response;
+                response.msgtype = ERROR;
+                write(client_fd, &response, sizeof(response));
+                
+                // Log the error
+                pthread_mutex_lock(&log_file_lock);
+                fprintf(log_file, "<%d> ERROR\n", client_fd);
+                pthread_mutex_unlock(&log_file_lock);
+            }
+                break;
+            default:
+                pthread_mutex_lock(&log_file_lock);
+                fprintf(log_file, "%d ERROR\n", client_fd);
+                fflush(log_file);
+                pthread_mutex_unlock(&log_file_lock);
+
+                message.msgtype = ERROR;
+                write(client_fd, &message, sizeof(message_t));
+                break;
+        }
+    }
+
+    close(client_fd);
+    return NULL;
+}
+
+int main(int argc, char* argv[]) {
+    if (argc < 3) {
+        fprintf(stderr, "Usage: %s PORT_NUMBER LOG_FILENAME\n", argv[0]);
+        exit(EXIT_FAILURE);
+    }
+    // port = atoi(argv[1]);
+    // log_filename = argv[2];
+    int port_number = atoi(argv[1]);
+    char *log_filename = argv[2];
+
+    // Initialize server resources
+    init_server_resources(log_filename);
+
+    // Set up signal handler for SIGINT
     struct sigaction myaction = {{0}};
     myaction.sa_handler = sigint_handler;
     if (sigaction(SIGINT, &myaction, NULL) == -1) {
-        printf("signal handler failed to install\n");
+        perror("signal handler failed to install");
         exit(EXIT_FAILURE);
-    }
-
-    // Initialize server statistics and charity data structures
-    clientCnt = 0;
-    memset(maxDonations, 0, sizeof(maxDonations));
-    for (int i = 0; i < 5; i++) {
-        charities[i].totalDonationAmt = 0;
-        charities[i].topDonation = 0;
-        charities[i].numDonations = 0;
     }
 
     // Initiate server socket for listening
@@ -185,101 +345,81 @@ int main(int argc, char *argv[]) {
     struct sockaddr_in client_addr;
     unsigned int client_addr_len = sizeof(client_addr);
 
-    while(1) {
+    while (!sigint_flag) {
         // Wait and Accept the connection from client
-        client_fd = accept(listen_fd, (SA*)&client_addr, &client_addr_len);        
-        if (client_fd < 0) {
+        client_fd = accept(listen_fd, (SA*)&client_addr, &client_addr_len); 
+        if (client_fd == -1) {
             if (errno == EINTR && sigint_flag) {
                 break;
-            } else {
-                // Accept failed for other reason, print error, exit.
-                printf("server acccept failed for other reason\n");
-                exit(EXIT_FAILURE);
             }
         }
 
-        // Call the helper function you made to join terminated threads.
-//      remove_joinable_threads();
         // Clean up terminated threads
-        cleanup_threads();
-        
-        // Create your new thread.
-//      tid_t new_tid = pthread_create(client_function);
-        // Create a new thread for each client connection
-        pthread_t client_thread;
-        int *client_fd_ptr = malloc(sizeof(int));
-        *client_fd_ptr = client_fd;
-        pthread_create(&client_thread, NULL, client_handler, client_fd_ptr);
-        pthread_detach(client_thread);
-        
-        // Put new_tid into the thread_list.
-//      InsertAtHead(thread_list, new_tid);
-        // Add thread to the thread list
-        pthread_mutex_lock(&thread_list_lock);
-        thread_node_t *new_node = malloc(sizeof(thread_node_t));
-        new_node->thread_id = client_thread;
-        new_node->next = thread_list_head;
-        thread_list_head = new_node;
-        pthread_mutex_unlock(&thread_list_lock);
-        
-        // Update client connection count
+        node_t* current = thread_list->head;
+        while (current) {
+            pthread_t tid = *(pthread_t*)current->data;
+            if (pthread_tryjoin_np(tid, NULL) == 0) {
+                node_t* to_delete = current;
+                current = current->next;
+                if (to_delete->prev) {
+                    to_delete->prev->next = to_delete->next;
+                }
+                if (to_delete->next) {
+                    to_delete->next->prev = to_delete->prev;
+                }
+                if (thread_list->head == to_delete) {
+                    thread_list->head = to_delete->next;
+                }
+                thread_list->length--;
+                free(to_delete->data);
+                free(to_delete);
+            } else {
+                current = current->next;
+            }
+        }
+
+        // Increment client count
         pthread_mutex_lock(&server_stats_lock);
         clientCnt++;
         pthread_mutex_unlock(&server_stats_lock);
-        
-        // Need to see if SIGINT occurred between accept and here.
-        if (sigint_flag) {
-            break;
+
+        // Create client thread
+        pthread_t tid;
+        int* client_fd_ptr = malloc(sizeof(int));
+        *client_fd_ptr = client_fd;
+        if (pthread_create(&tid, NULL, client_thread, client_fd_ptr) != 0) {
+            perror("pthread_create");
+            close(client_fd);
+            free(client_fd_ptr);
+            continue;
         }
+
+        // Add thread to linked list
+        pthread_t* tid_ptr = malloc(sizeof(pthread_t));
+        *tid_ptr = tid;
+        InsertAtHead(thread_list, tid_ptr);
     }
-    
-    // Kill all threads in thread_list, print stats, exit.
-    cleanup_threads();
-    print_stats_and_exit();
 
+    // Clean up and terminate all client threads
     close(listen_fd);
-    return 0;
-}
+    node_t* current = thread_list->head;
+    while (current) {
+        pthread_t tid = *(pthread_t*)current->data;
+        pthread_kill(tid, SIGINT);
+        pthread_join(tid, NULL);
+        current = current->next;
+    }
 
-void print_stats_and_exit() {
-    for (int i = 0; i < 5; i++) {
-        printf("%d %d %lu %lu\n", i, charities[i].numDonations, charities[i].topDonation, charities[i].totalDonationAmt);
+    // Output charity and server statistics
+    for (int i = 0; i < CHARITY_COUNT; i++) {
+        printf("%d, %d, %lu, %lu\n", i, charities[i].numDonations, charities[i].topDonation, charities[i].totalDonationAmt);
     }
     fprintf(stderr, "%d\n%lu, %lu, %lu\n", clientCnt, maxDonations[0], maxDonations[1], maxDonations[2]);
-    exit(0);
-}
 
-void cleanup_threads() {
-    pthread_mutex_lock(&thread_list_lock);
-    thread_node_t *current = thread_list_head;
-    thread_node_t *prev = NULL;
+    // Clean up server resources
+    cleanup_server_resources();
 
-    while (current != NULL) {
-        if (pthread_tryjoin_np(current->thread_id, NULL) == 0) {
-            // Thread has terminated, remove from the list
-            if (prev == NULL) {
-                thread_list_head = current->next;
-            } else {
-                prev->next = current->next;
-            }
-            thread_node_t *temp = current;
-            current = current->next;
-            free(temp);
-        } else {
-            // Thread is still running, move to the next
-            prev = current;
-            current = current->next;
-        }
-    }
-
-    pthread_mutex_unlock(&thread_list_lock);
-}
-
-void sigint_handler(int sig) {
-    sigint_flag = 1;
-//    printf("shutting down server\n");
-//    close(listen_fd);
-//    exit(0);
+    return 0;
 }
 
 int socket_listen_init(int server_port) {
@@ -323,120 +463,4 @@ int socket_listen_init(int server_port) {
     }
     return sockfd;
 }
-
-void *client_handler(void *client_fd_ptr) {
-    int client_fd = *((int *)client_fd_ptr);
-    free(client_fd_ptr);
-    message_t message;
-    uint64_t client_total_donations = 0;
-
-    while (read(client_fd, &message, sizeof(message_t)) > 0) {
-        switch (message.msgtype) {
-            case DONATE:
-                if (message.msgdata.donation.charity < 0 || message.msgdata.donation.charity >= 5) {
-                    // Invalid charity index, send error message
-                    message.msgtype = ERROR;
-                    pthread_mutex_lock(&log_file_lock);
-                    fprintf(log_file, "%d ERROR\n", client_fd);
-                    fflush(log_file);
-                    pthread_mutex_unlock(&log_file_lock);
-                    write(client_fd, &message, sizeof(message_t));
-                    continue;
-                }
-
-                pthread_mutex_lock(&charity_locks[message.msgdata.donation.charity]);
-                charities[message.msgdata.donation.charity].totalDonationAmt += message.msgdata.donation.amount;
-                if (message.msgdata.donation.amount > charities[message.msgdata.donation.charity].topDonation) {
-                    charities[message.msgdata.donation.charity].topDonation = message.msgdata.donation.amount;
-                }
-                charities[message.msgdata.donation.charity].numDonations++;
-                pthread_mutex_unlock(&charity_locks[message.msgdata.donation.charity]);
-
-                client_total_donations += message.msgdata.donation.amount;
-
-                pthread_mutex_lock(&log_file_lock);
-                fprintf(log_file, "%d DONATE %d %lu\n", client_fd, message.msgdata.donation.charity, message.msgdata.donation.amount);
-                fflush(log_file);
-                pthread_mutex_unlock(&log_file_lock);
-
-                write(client_fd, &message, sizeof(message_t));
-                break;
-
-            case CINFO:
-                if (message.msgdata.donation.charity < 0 || message.msgdata.donation.charity >= 5) {
-                    // Invalid charity index, send error message
-                    message.msgtype = ERROR;
-                    pthread_mutex_lock(&log_file_lock);
-                    fprintf(log_file, "%d ERROR\n", client_fd);
-                    fflush(log_file);
-                    pthread_mutex_unlock(&log_file_lock);
-                    write(client_fd, &message, sizeof(message_t));
-                    continue;
-                }
-
-                pthread_mutex_lock(&charity_locks[message.msgdata.donation.charity]);
-                message.msgdata.charityInfo = charities[message.msgdata.donation.charity];
-                pthread_mutex_unlock(&charity_locks[message.msgdata.donation.charity]);
-
-                pthread_mutex_lock(&log_file_lock);
-                fprintf(log_file, "%d CINFO %d\n", client_fd, message.msgdata.donation.charity);
-                fflush(log_file);
-                pthread_mutex_unlock(&log_file_lock);
-
-                write(client_fd, &message, sizeof(message_t));
-                break;
-
-            case TOP:
-                pthread_mutex_lock(&server_stats_lock);
-                for (int i = 0; i < 3; i++) {
-                    message.msgdata.maxDonations[i] = maxDonations[i];
-                }
-                pthread_mutex_unlock(&server_stats_lock);
-
-                pthread_mutex_lock(&log_file_lock);
-                fprintf(log_file, "%d TOP\n", client_fd);
-                fflush(log_file);
-                pthread_mutex_unlock(&log_file_lock);
-
-                write(client_fd, &message, sizeof(message_t));
-                break;
-
-            case LOGOUT:
-                pthread_mutex_lock(&log_file_lock);
-                fprintf(log_file, "%d LOGOUT\n", client_fd);
-                fflush(log_file);
-                pthread_mutex_unlock(&log_file_lock);
-
-                // Update maxDonations if necessary
-                pthread_mutex_lock(&server_stats_lock);
-                for (int i = 0; i < 3; i++) {
-                    if (client_total_donations > maxDonations[i]) {
-                        for (int j = 2; j > i; j--) {
-                            maxDonations[j] = maxDonations[j-1];
-                        }
-                        maxDonations[i] = client_total_donations;
-                        break;
-                    }
-                }
-                pthread_mutex_unlock(&server_stats_lock);
-
-                close(client_fd);
-                return NULL;
-
-            default:
-                pthread_mutex_lock(&log_file_lock);
-                fprintf(log_file, "%d ERROR\n", client_fd);
-                fflush(log_file);
-                pthread_mutex_unlock(&log_file_lock);
-
-                message.msgtype = ERROR;
-                write(client_fd, &message, sizeof(message_t));
-                break;
-        }
-    }
-
-    close(client_fd);
-    return NULL;
-}
-
 
