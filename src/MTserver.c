@@ -15,6 +15,79 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+// sigint_vallue to sigint_flag
+// change cleanupthreads name and maybe add parameter
+
+//Do not write printer or comparator functions for your linked list of ThreadIDs. You don’t need to print it and the order doesn’t matter at all.
+//Only use InsertAtHead to insert.
+//Write an empty function for the deleter that does nothing when called because remember, you’re storing the tid_t directly in the void* data of each node, there is nothing to delete.
+void emptyDeleter() {
+}
+
+typedef struct node {
+    void* data;          
+    struct node* next;   
+    struct node* prev;   
+} node_t;
+
+/*
+ * Structure for the base linkedList
+ * 
+ * head - a pointer to the first node in the list. NULL if length is 0.
+ * length - the current length of the linkedList. Must be initialized to 0.
+ * comparator - function pointer to linkedList comparator. Must be initialized!
+ */
+typedef struct list {
+    node_t* head;
+    int length;
+    /* the comparator uses the values of the nodes directly (i.e function has to be type aware) */
+    int (*comparator)(const void*, const void*);
+    void (*printer)(void*, void*);  // function pointer for printing the data stored
+    void (*deleter)(void*);              // function pointer for deleting any dynamically 
+                                         // allocated items within the data stored
+} dlist_t;
+
+dlist_t* CreateList(int (*compare)(const void*, const void*), void (*print)(void*, void*),
+                   void (*delete)(void*)) {
+    dlist_t* list = malloc(sizeof(dlist_t));
+    list->comparator = compare;
+    list->printer = print;
+    list->deleter = delete;
+    list->length = 0;
+    list->head = NULL;
+    return list;
+}
+
+void InsertAtHead(dlist_t* list, void* val_ref) {
+    if(list == NULL || val_ref == NULL)
+        return;
+    if (list->length == 0) list->head = NULL;
+
+    node_t** head = &(list->head);
+    node_t* new_node;
+    new_node = malloc(sizeof(node_t));
+
+    new_node->data = val_ref;
+    new_node->next = *head;
+    new_node->prev = NULL;
+
+    // moves list head to the new node
+    if(*head != NULL)
+        (*head)->prev = new_node;
+    *head = new_node;
+    list->length++;
+}
+
+/********************** DECLARE ALL LOCKS HERE BETWEEN THES LINES *************/
+pthread_mutex_t server_stats_lock = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t log_file_lock = PTHREAD_MUTEX_INITIALIZER;
+//pthread_mutex_t server_stats_lock;
+pthread_mutex_t charity_locks[5];
+//pthread_mutex_t log_file_lock;
+pthread_mutex_t thread_list_lock;
+volatile sig_atomic_t sigint_flag = 1;
+/***********************************************************************************************/
+
 #define SA struct sockaddr
 #define USAGE_MSG_MT "ZotDonation_MTserver [-h] PORT_NUMBER LOG_FILENAME"
 
@@ -45,11 +118,6 @@ typedef struct {
         uint64_t amount_high; uint64_t amount_low;} stats;   // For STATS (part 2 only)
     } msgdata; 
 } message_t;
-
-pthread_mutex_t server_stats_lock;
-pthread_mutex_t charity_locks[5];
-pthread_mutex_t log_file_lock;
-pthread_mutex_t thread_list_lock;
 
 charity_t charities[5];
 uint32_t clientCnt = 0;
@@ -119,22 +187,33 @@ int main(int argc, char *argv[]) {
 
     while(1) {
         // Wait and Accept the connection from client
-        client_fd = accept(listen_fd, (SA*)&client_addr, &client_addr_len);
+        client_fd = accept(listen_fd, (SA*)&client_addr, &client_addr_len);        
         if (client_fd < 0) {
-            printf("server accept failed\n");
-            exit(EXIT_FAILURE);
+            if (errno == EINTR && sigint_flag) {
+                break;
+            } else {
+                // Accept failed for other reason, print error, exit.
+                printf("server acccept failed for other reason\n");
+                exit(EXIT_FAILURE);
+            }
         }
 
+        // Call the helper function you made to join terminated threads.
+//      remove_joinable_threads();
         // Clean up terminated threads
         cleanup_threads();
-
+        
+        // Create your new thread.
+//      tid_t new_tid = pthread_create(client_function);
         // Create a new thread for each client connection
         pthread_t client_thread;
         int *client_fd_ptr = malloc(sizeof(int));
         *client_fd_ptr = client_fd;
         pthread_create(&client_thread, NULL, client_handler, client_fd_ptr);
         pthread_detach(client_thread);
-
+        
+        // Put new_tid into the thread_list.
+//      InsertAtHead(thread_list, new_tid);
         // Add thread to the thread list
         pthread_mutex_lock(&thread_list_lock);
         thread_node_t *new_node = malloc(sizeof(thread_node_t));
@@ -142,21 +221,65 @@ int main(int argc, char *argv[]) {
         new_node->next = thread_list_head;
         thread_list_head = new_node;
         pthread_mutex_unlock(&thread_list_lock);
-
+        
         // Update client connection count
         pthread_mutex_lock(&server_stats_lock);
         clientCnt++;
         pthread_mutex_unlock(&server_stats_lock);
+        
+        // Need to see if SIGINT occurred between accept and here.
+        if (sigint_flag) {
+            break;
+        }
     }
+    
+    // Kill all threads in thread_list, print stats, exit.
+    cleanup_threads();
+    print_stats_and_exit();
 
     close(listen_fd);
     return 0;
 }
 
-void sigint_handler(int sig) {
-    printf("shutting down server\n");
-    close(listen_fd);
+void print_stats_and_exit() {
+    for (int i = 0; i < 5; i++) {
+        printf("%d %d %lu %lu\n", i, charities[i].numDonations, charities[i].topDonation, charities[i].totalDonationAmt);
+    }
+    fprintf(stderr, "%d\n%lu, %lu, %lu\n", clientCnt, maxDonations[0], maxDonations[1], maxDonations[2]);
     exit(0);
+}
+
+void cleanup_threads() {
+    pthread_mutex_lock(&thread_list_lock);
+    thread_node_t *current = thread_list_head;
+    thread_node_t *prev = NULL;
+
+    while (current != NULL) {
+        if (pthread_tryjoin_np(current->thread_id, NULL) == 0) {
+            // Thread has terminated, remove from the list
+            if (prev == NULL) {
+                thread_list_head = current->next;
+            } else {
+                prev->next = current->next;
+            }
+            thread_node_t *temp = current;
+            current = current->next;
+            free(temp);
+        } else {
+            // Thread is still running, move to the next
+            prev = current;
+            current = current->next;
+        }
+    }
+
+    pthread_mutex_unlock(&thread_list_lock);
+}
+
+void sigint_handler(int sig) {
+    sigint_flag = 1;
+//    printf("shutting down server\n");
+//    close(listen_fd);
+//    exit(0);
 }
 
 int socket_listen_init(int server_port) {
@@ -316,28 +439,4 @@ void *client_handler(void *client_fd_ptr) {
     return NULL;
 }
 
-void cleanup_threads() {
-    pthread_mutex_lock(&thread_list_lock);
-    thread_node_t *current = thread_list_head;
-    thread_node_t *prev = NULL;
 
-    while (current != NULL) {
-        if (pthread_tryjoin_np(current->thread_id, NULL) == 0) {
-            // Thread has terminated, remove from the list
-            if (prev == NULL) {
-                thread_list_head = current->next;
-            } else {
-                prev->next = current->next;
-            }
-            thread_node_t *temp = current;
-            current = current->next;
-            free(temp);
-        } else {
-            // Thread is still running, move to the next
-            prev = current;
-            current = current->next;
-        }
-    }
-
-    pthread_mutex_unlock(&thread_list_lock);
-}
