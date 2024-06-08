@@ -54,11 +54,12 @@ pthread_mutex_t logMutex;
 sem_t readerSem;
 sem_t writerSem;
 int readerCount = 0;
-int writerCount = 0;
 int serverRunning = 1;
 FILE *logFile;
 dlist_t *clientList;
 sbuf_t sbuf;
+pthread_t writerThread;
+int serverSocket;
 
 // Function declarations
 void sbuf_init(sbuf_t *sp, int n);
@@ -89,7 +90,6 @@ int main(int argc, char *argv[]) {
     init_server(readerPort, writerPort, logFilename);
     sbuf_init(&sbuf, SBUF_SIZE);
 
-    pthread_t writerThread;
     if (pthread_create(&writerThread, NULL, writer_thread, (void *)(intptr_t)writerPort) != 0) {
         perror("Failed to create writer thread");
         cleanup_server();
@@ -97,7 +97,6 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    int serverSocket;
     struct sockaddr_in serverAddr;
     serverSocket = socket(AF_INET, SOCK_STREAM, 0);
     if (serverSocket < 0) {
@@ -153,7 +152,7 @@ int main(int argc, char *argv[]) {
         pthread_mutex_unlock(&statsMutex);
     }
 
-    close(serverSocket);
+    // Signal writer thread to terminate
     pthread_join(writerThread, NULL);
     cleanup_server();
     sbuf_deinit(&sbuf);
@@ -199,7 +198,7 @@ void *reader_thread(void *arg) {
     int clientSocket = (intptr_t)arg;
     char buffer[BUFFER_SIZE];
 
-    while (1) {
+    while (serverRunning) {
         ssize_t bytesRead = read(clientSocket, buffer, sizeof(buffer) - 1);
         if (bytesRead <= 0) {
             if (bytesRead < 0) {
@@ -245,34 +244,34 @@ void *reader_thread(void *arg) {
 
 void *writer_thread(void *arg) {
     int writerPort = (intptr_t)arg;
-    int serverSocket;
-    struct sockaddr_in serverAddr;
-    serverSocket = socket(AF_INET, SOCK_STREAM, 0);
-    if (serverSocket < 0) {
+    int writerSocket;
+    struct sockaddr_in writerAddr;
+    writerSocket = socket(AF_INET, SOCK_STREAM, 0);
+    if (writerSocket < 0) {
         perror("Failed to create socket");
         return NULL;
     }
 
-    serverAddr.sin_family = AF_INET;
-    serverAddr.sin_port = htons(writerPort);
-    serverAddr.sin_addr.s_addr = INADDR_ANY;
+    writerAddr.sin_family = AF_INET;
+    writerAddr.sin_port = htons(writerPort);
+    writerAddr.sin_addr.s_addr = INADDR_ANY;
 
-    if (bind(serverSocket, (struct sockaddr *)&serverAddr, sizeof(serverAddr)) < 0) {
+    if (bind(writerSocket, (struct sockaddr *)&writerAddr, sizeof(writerAddr)) < 0) {
         perror("Failed to bind socket");
-        close(serverSocket);
+        close(writerSocket);
         return NULL;
     }
 
-    if (listen(serverSocket, 1) < 0) {
+    if (listen(writerSocket, 1) < 0) {
         perror("Failed to listen on socket");
-        close(serverSocket);
+        close(writerSocket);
         return NULL;
     }
 
     printf("Listening for writers on port %d.\n", writerPort);
 
     while (serverRunning) {
-        int clientSocket = accept(serverSocket, NULL, NULL);
+        int clientSocket = accept(writerSocket, NULL, NULL);
         if (clientSocket < 0) {
             if (errno == EINTR) {
                 continue;
@@ -309,13 +308,18 @@ void *writer_thread(void *arg) {
         close(clientSocket);
     }
 
-    close(serverSocket);
+    close(writerSocket);
     return NULL;
 }
 
 void handle_signal(int sig) {
     if (sig == SIGINT) {
         serverRunning = 0;
+        // Wake up any threads waiting on semaphores
+        sem_post(&sbuf.items);
+        sem_post(&readerSem);
+        sem_post(&writerSem);
+        close(serverSocket); // Close the main server socket
     }
 }
 
@@ -343,13 +347,6 @@ void init_server(int readerPort, int writerPort, const char *logFilename) {
     }
 }
 
-void cleanup_server() {
-    fclose(logFile);
-    pthread_mutex_destroy(&statsMutex);
-    pthread_mutex_destroy(&logMutex);
-    sem_destroy(&readerSem);
-    sem_destroy(&writerSem);
-}
 
 void process_donate(int clientSocket, const char *buffer) {
     sem_wait(&writerSem);
@@ -403,3 +400,14 @@ void log_message(const char *message) {
     fflush(logFile);
     pthread_mutex_unlock(&logMutex);
 }
+
+void cleanup_server() {
+    fclose(logFile);
+    pthread_mutex_destroy(&statsMutex);
+    pthread_mutex_destroy(&logMutex);
+    sem_destroy(&readerSem);
+    sem_destroy(&writerSem);
+    sbuf_deinit(&sbuf);
+}
+
+
