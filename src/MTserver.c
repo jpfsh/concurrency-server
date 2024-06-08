@@ -16,15 +16,6 @@
 #include <unistd.h>
 #include <errno.h>
 
-pthread_mutex_t server_stats_lock;
-pthread_mutex_t log_file_lock;
-pthread_mutex_t charity_locks[5];
-
-#define SA struct sockaddr
-#define USAGE_MSG_MT "ZotDonation_MTserver [-h] PORT_NUMBER LOG_FILENAME"
-
-int socket_listen_init(int server_port);
-
 // These are the message types for the protocol
 enum msg_types {
     DONATE,
@@ -34,6 +25,9 @@ enum msg_types {
     STATS,
     ERROR = 0xFF
 };
+
+#define SA struct sockaddr
+#define USAGE_MSG_MT "ZotDonation_MTserver [-h] PORT_NUMBER LOG_FILENAME"
 
 // Define constants
 #define CHARITY_COUNT 5
@@ -66,33 +60,44 @@ void InsertAtHead(dlist_t* list, void* val_ref);
 // Global variables for server statistics
 int clientCnt = 0;
 uint64_t maxDonations[MAX_DONATIONS] = {0};
+pthread_mutex_t server_stats_lock;
 
 // Charity structure
 typedef struct {
-    int numDonations;
     uint64_t totalDonationAmt;
     uint64_t topDonation;
+    uint32_t numDonations;
 } charity_t;
 
-// This is the struct for each message sent to the server
-typedef struct { 
-    uint8_t msgtype;  
+// Global variables for charity locks
+pthread_mutex_t charity_locks[CHARITY_COUNT];
+
+// Message structure
+typedef struct {
+    uint8_t msgtype;
     union {
         uint64_t maxDonations[3];  // For TOP
         charity_t charityInfo;     // For CINFO response from Server
-        struct {uint8_t charity; uint64_t amount;} donation; // For DONATE & CINFO from client
-        struct {uint8_t charityID_high; uint8_t charityID_low; 
-        uint64_t amount_high; uint64_t amount_low;} stats;   // For STATS (part 2 only)
-    } msgdata; 
+        struct {
+            uint8_t charity;
+            uint64_t amount;
+        } donation; // For DONATE & CINFO from client
+        struct {
+            uint8_t charityID_high;
+            uint8_t charityID_low;
+            uint64_t amount_high;
+            uint64_t amount_low;
+        } stats; // For STATS (part 2 only)
+    } msgdata;
 } message_t;
 
 // Global variables for other components
 charity_t charities[CHARITY_COUNT];
+pthread_mutex_t log_file_lock;
 dlist_t* thread_list;
 FILE* log_file;
 volatile sig_atomic_t sigint_flag = 0;
-// int server_fd;
-int listen_fd;
+int server_fd;
 
 // Function definitions
 dlist_t* CreateList(int (*compare)(const void*, const void*), void (*print)(void*, void*), void (*delete)(void*)) {
@@ -121,6 +126,8 @@ void InsertAtHead(dlist_t* list, void* val_ref) {
 // Signal handler
 void sigint_handler(int signum) {
     sigint_flag = 1;
+    close(server_fd);
+    exit(0);
 }
 
 // Initialize server resources
@@ -132,16 +139,23 @@ void init_server_resources(const char* log_filename) {
     }
     pthread_mutex_init(&server_stats_lock, NULL);
 
-    // Initialize charities
+    // Initialize charities and their locks
     for (int i = 0; i < CHARITY_COUNT; i++) {
         charities[i].numDonations = 0;
         charities[i].totalDonationAmt = 0;
         charities[i].topDonation = 0;
-        pthread_mutex_init(&charity_locks[i], NULL);
+        if (pthread_mutex_init(&charity_locks[i], NULL) != 0) {
+            perror("Mutex initialization failed");
+            exit(EXIT_FAILURE);
+        }
     }
 
     // Initialize log file
-    log_file = fopen(log_filename, "w");
+    log_file = fopen(log_filename, "a");
+    if (log_file == NULL) {
+        perror("Log file opening failed");
+        exit(EXIT_FAILURE);
+    }
     pthread_mutex_init(&log_file_lock, NULL);
 
     // Initialize thread list
@@ -169,26 +183,59 @@ void* client_thread(void* arg) {
     message_t message;
     uint64_t client_total_donations = 0;
 
-    while (read(client_fd, &message, sizeof(message_t)) > 0) {
+    while (1) {
+        // Read message type
+        ssize_t bytes_read = read(client_fd, &message, sizeof(message_t));
+        if (bytes_read <= 0) {
+            if (bytes_read < 0) {
+                perror("read");
+            }
+            break; // Client disconnected or error occurred
+        }
+
+        // Ensure full message is read
+        size_t total_bytes_read = bytes_read;
+        while (total_bytes_read < sizeof(message_t)) {
+            bytes_read = read(client_fd, ((char*)&message) + total_bytes_read, sizeof(message_t) - total_bytes_read);
+            if (bytes_read <= 0) {
+                if (bytes_read < 0) {
+                    perror("read");
+                }
+                break; // Client disconnected or error occurred
+            }
+            total_bytes_read += bytes_read;
+        }
+
+        if (total_bytes_read < sizeof(message_t)) {
+            // Incomplete message read, handle error
+            perror("Incomplete message read");
+            break;
+        }
+
+        // Log received message
+        printf("Received message type: %d\n", message.msgtype);
+
         switch (message.msgtype) {
             case DONATE:
-                if (message.msgdata.donation.charity < 0 || message.msgdata.donation.charity >= 5) {
-                    // Invalid charity index, send error message
+                if (message.msgdata.donation.charity >= CHARITY_COUNT) {
                     message.msgtype = ERROR;
-                    pthread_mutex_lock(&log_file_lock);
-                    fprintf(log_file, "%d ERROR\n", client_fd);
-                    fflush(log_file);
-                    pthread_mutex_unlock(&log_file_lock);
                     write(client_fd, &message, sizeof(message_t));
                     continue;
                 }
 
-                pthread_mutex_lock(&charity_locks[message.msgdata.donation.charity]);
-                charities[message.msgdata.donation.charity].totalDonationAmt += message.msgdata.donation.amount;
-                if (message.msgdata.donation.amount > charities[message.msgdata.donation.charity].topDonation) {
-                    charities[message.msgdata.donation.charity].topDonation = message.msgdata.donation.amount;
+                printf("Handling DONATE message\n");
+                int donate_lock_result = pthread_mutex_trylock(&charity_locks[message.msgdata.donation.charity]);
+                if (donate_lock_result) {
+                    pthread_mutex_unlock(&charity_locks[message.msgdata.donation.charity]);
                 }
-                charities[message.msgdata.donation.charity].numDonations++;
+
+                // pthread_mutex_lock(&charity_locks[message.msgdata.donation.charity]);
+                charity_t *charity = &charities[message.msgdata.donation.charity];
+                charity->numDonations++;
+                charity->totalDonationAmt += message.msgdata.donation.amount;
+                if (message.msgdata.donation.amount > charity->topDonation) {
+                    charity->topDonation = message.msgdata.donation.amount;
+                }
                 pthread_mutex_unlock(&charity_locks[message.msgdata.donation.charity]);
 
                 client_total_donations += message.msgdata.donation.amount;
@@ -201,31 +248,44 @@ void* client_thread(void* arg) {
                 write(client_fd, &message, sizeof(message_t));
                 break;
 
-
             case CINFO:
-                if (message.msgdata.donation.charity < 0 || message.msgdata.donation.charity >= 5) {
+                if (message.msgdata.donation.charity >= CHARITY_COUNT) {
                     message.msgtype = ERROR;
-                    pthread_mutex_lock(&log_file_lock);
-                    fprintf(log_file, "%d ERROR\n", client_fd);
-                    fflush(log_file);
-                    pthread_mutex_unlock(&log_file_lock);
                     write(client_fd, &message, sizeof(message_t));
                     continue;
                 }
 
-                pthread_mutex_lock(&charity_locks[message.msgdata.donation.charity]);
-                message.msgdata.charityInfo = charities[message.msgdata.donation.charity];
+                printf("Handling CINFO message\n");
+                int cinfo_lock_result = pthread_mutex_trylock(&charity_locks[message.msgdata.donation.charity]);
+                if (cinfo_lock_result) {
+                    pthread_mutex_unlock(&charity_locks[message.msgdata.donation.charity]);
+                }
+
+                // pthread_mutex_unlock(&charity_locks[message.msgdata.donation.charity]);
+                printf("Lock acquired for CINFO message\n");
+                // Directly copy the entire struct to ensure no misalignment
+                charity_t *src_charity = &charities[message.msgdata.donation.charity];
+                charity_t *dest_charity = &message.msgdata.charityInfo;
+                memcpy(dest_charity, src_charity, sizeof(charity_t));
+
                 pthread_mutex_unlock(&charity_locks[message.msgdata.donation.charity]);
+                printf("Lock released for CINFO message\n");
 
                 pthread_mutex_lock(&log_file_lock);
                 fprintf(log_file, "%d CINFO %d\n", client_fd, message.msgdata.donation.charity);
                 fflush(log_file);
                 pthread_mutex_unlock(&log_file_lock);
 
+                printf("Sending CINFO response: numDonations=%u, totalDonationAmt=%lu, topDonation=%lu\n",
+                       message.msgdata.charityInfo.numDonations,
+                       message.msgdata.charityInfo.totalDonationAmt,
+                       message.msgdata.charityInfo.topDonation);
+
                 write(client_fd, &message, sizeof(message_t));
                 break;
 
             case TOP:
+                printf("Handling TOP message\n");
                 pthread_mutex_lock(&server_stats_lock);
                 for (int i = 0; i < MAX_DONATIONS; i++) {
                     message.msgdata.maxDonations[i] = maxDonations[i];
@@ -241,6 +301,7 @@ void* client_thread(void* arg) {
                 break;
 
             case LOGOUT:
+                printf("Handling LOGOUT message\n");
                 pthread_mutex_lock(&log_file_lock);
                 fprintf(log_file, "%d LOGOUT\n", client_fd);
                 fflush(log_file);
@@ -261,47 +322,9 @@ void* client_thread(void* arg) {
 
                 close(client_fd);
                 return NULL;
-            case STATS:
-            {
-                // Lock all charity locks to ensure consistent stats
-                for (int i = 0; i < CHARITY_COUNT; i++) {
-                    pthread_mutex_lock(&charity_locks[i]);
-                }
 
-                // Prepare the statistics message
-                message_t response;
-                response.msgtype = STATS;
-                for (int i = 0; i < CHARITY_COUNT; i++) {
-                    response.msgdata.stats.charityID_low = i;
-                    response.msgdata.stats.amount_low = charities[i].totalDonationAmt;
-                    // Send the stats for each charity
-                    write(client_fd, &response, sizeof(response));
-                    // Log the stats request
-                    pthread_mutex_lock(&log_file_lock);
-                    fprintf(log_file, "<%d> STATS %d:%llu\n", client_fd, i, (unsigned long long)charities[i].totalDonationAmt);
-                    pthread_mutex_unlock(&log_file_lock);
-                }
-
-                // Unlock all charity locks
-                for (int i = 0; i < CHARITY_COUNT; i++) {
-                    pthread_mutex_unlock(&charity_locks[i]);
-                }
-            }
-                break;
-            case ERROR:
-            {
-                // Prepare the error message
-                message_t response;
-                response.msgtype = ERROR;
-                write(client_fd, &response, sizeof(response));
-                
-                // Log the error
-                pthread_mutex_lock(&log_file_lock);
-                fprintf(log_file, "<%d> ERROR\n", client_fd);
-                pthread_mutex_unlock(&log_file_lock);
-            }
-                break;
             default:
+                printf("Handling ERROR message\n");
                 pthread_mutex_lock(&log_file_lock);
                 fprintf(log_file, "%d ERROR\n", client_fd);
                 fflush(log_file);
@@ -318,14 +341,15 @@ void* client_thread(void* arg) {
 }
 
 int main(int argc, char* argv[]) {
-    if (argc < 3) {
+    // Parse command line arguments
+    int port;
+    char* log_filename;
+    if (argc != 3) {
         fprintf(stderr, "Usage: %s PORT_NUMBER LOG_FILENAME\n", argv[0]);
         exit(EXIT_FAILURE);
     }
-    // port = atoi(argv[1]);
-    // log_filename = argv[2];
-    int port_number = atoi(argv[1]);
-    char *log_filename = argv[2];
+    port = atoi(argv[1]);
+    log_filename = argv[2];
 
     // Initialize server resources
     init_server_resources(log_filename);
@@ -338,19 +362,41 @@ int main(int argc, char* argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    // Initiate server socket for listening
-    listen_fd = socket_listen_init(port_number);
-    printf("Currently listening on port: %d.\n", port_number);
-    int client_fd;
-    struct sockaddr_in client_addr;
-    unsigned int client_addr_len = sizeof(client_addr);
+    // Create and bind server socket
+    struct sockaddr_in server_addr;
+    server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd == -1) {
+        perror("socket");
+        exit(EXIT_FAILURE);
+    }
+
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(port);
+
+    if (bind(server_fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) == -1) {
+        perror("bind");
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
+
+    if (listen(server_fd, 10) == -1) {
+        perror("listen");
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
 
     while (!sigint_flag) {
-        // Wait and Accept the connection from client
-        client_fd = accept(listen_fd, (SA*)&client_addr, &client_addr_len); 
+        struct sockaddr_in client_addr;
+        socklen_t client_len = sizeof(client_addr);
+        int client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
         if (client_fd == -1) {
             if (errno == EINTR && sigint_flag) {
                 break;
+            } else {
+                perror("accept");
+                continue;
             }
         }
 
@@ -401,7 +447,7 @@ int main(int argc, char* argv[]) {
     }
 
     // Clean up and terminate all client threads
-    close(listen_fd);
+    close(server_fd);
     node_t* current = thread_list->head;
     while (current) {
         pthread_t tid = *(pthread_t*)current->data;
@@ -412,7 +458,7 @@ int main(int argc, char* argv[]) {
 
     // Output charity and server statistics
     for (int i = 0; i < CHARITY_COUNT; i++) {
-        printf("%d, %d, %lu, %lu\n", i, charities[i].numDonations, charities[i].topDonation, charities[i].totalDonationAmt);
+        printf("%d, %u, %lu, %lu\n", i, charities[i].numDonations, charities[i].topDonation, charities[i].totalDonationAmt);
     }
     fprintf(stderr, "%d\n%lu, %lu, %lu\n", clientCnt, maxDonations[0], maxDonations[1], maxDonations[2]);
 
@@ -421,46 +467,3 @@ int main(int argc, char* argv[]) {
 
     return 0;
 }
-
-int socket_listen_init(int server_port) {
-    int sockfd;
-    struct sockaddr_in servaddr;
-
-    // socket create and verification
-    sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd == -1) {
-        printf("socket creation failed...\n");
-        exit(EXIT_FAILURE);
-    } else {
-        printf("Socket successfully created\n");
-    }
-
-    bzero(&servaddr, sizeof(servaddr));
-
-    // assign IP, PORT
-    servaddr.sin_family = AF_INET;
-    servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
-    servaddr.sin_port = htons(server_port);
-
-    int opt = 1;
-    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, (char *)&opt, sizeof(opt)) < 0) {
-        perror("setsockopt");
-        exit(EXIT_FAILURE);
-    }
-
-    // Binding newly created socket to given IP and verification
-    if ((bind(sockfd, (SA*)&servaddr, sizeof(servaddr))) != 0) {
-        printf("socket bind failed\n");
-        exit(EXIT_FAILURE);
-    } else {
-        printf("Socket successfully binded\n");
-    }
-
-    // Now server is ready to listen and verification
-    if ((listen(sockfd, 1)) != 0) {
-        printf("Listen failed\n");
-        exit(EXIT_FAILURE);
-    }
-    return sockfd;
-}
-
