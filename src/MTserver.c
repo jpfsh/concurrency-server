@@ -16,6 +16,17 @@
 #include <unistd.h>
 #include <errno.h>
 
+// #define write_log (Emt,
+// ... )
+// pthread mutex
+// lock (log_file_
+// mutex) ;
+// fprintf(log_file, fmt,
+// VA ARGS
+// pthread
+// mutex unlock (10g_file_mutex) ;
+// write_log(“%d LOGOUT\n”, client_fd);
+
 // These are the message types for the protocol
 enum msg_types {
     DONATE,
@@ -223,36 +234,25 @@ void* client_thread(void* arg) {
                 }
 
                 printf("Handling DONATE message\n");
-                if (pthread_mutex_lock(&charity_locks[message.msgdata.donation.charity]) != 0) {
-                    perror("pthread_mutex_lock (DONATE)");
-                    break;
-                }
-                printf("Locked charity_locks[%d] for DONATE\n", message.msgdata.donation.charity);
+                int charity_id_donate = message.msgdata.donation.charity;
+                pthread_mutex_lock(&charity_locks[charity_id_donate]);
+                printf("Locked charity_locks[%d] for DONATE\n", charity_id_donate);
 
-                charities[message.msgdata.donation.charity].numDonations++;
-                charities[message.msgdata.donation.charity].totalDonationAmt += message.msgdata.donation.amount;
-                if (message.msgdata.donation.amount > charities[message.msgdata.donation.charity].topDonation) {
-                    charities[message.msgdata.donation.charity].topDonation = message.msgdata.donation.amount;
+                charities[charity_id_donate].numDonations++;
+                charities[charity_id_donate].totalDonationAmt += message.msgdata.donation.amount;
+                if (message.msgdata.donation.amount > charities[charity_id_donate].topDonation) {
+                    charities[charity_id_donate].topDonation = message.msgdata.donation.amount;
                 }
 
-                if (pthread_mutex_unlock(&charity_locks[message.msgdata.donation.charity]) != 0) {
-                    perror("pthread_mutex_unlock (DONATE)");
-                    break;
-                }
-                printf("Unlocked charity_locks[%d] for DONATE\n", message.msgdata.donation.charity);
+                pthread_mutex_unlock(&charity_locks[charity_id_donate]);
+                printf("Unlocked charity_locks[%d] for DONATE\n", charity_id_donate);
 
                 client_total_donations += message.msgdata.donation.amount;
 
-                if (pthread_mutex_lock(&log_file_lock) != 0) {
-                    perror("pthread_mutex_lock (log_file)");
-                    break;
-                }
-                fprintf(log_file, "%d DONATE %d %lu\n", client_fd, message.msgdata.donation.charity, message.msgdata.donation.amount);
+                pthread_mutex_lock(&log_file_lock);
+                fprintf(log_file, "%d DONATE %d %lu\n", client_fd, charity_id_donate, message.msgdata.donation.amount);
                 fflush(log_file);
-                if (pthread_mutex_unlock(&log_file_lock) != 0) {
-                    perror("pthread_mutex_unlock (log_file)");
-                    break;
-                }
+                pthread_mutex_unlock(&log_file_lock);
 
                 write(client_fd, &message, sizeof(message_t));
                 break;
@@ -265,30 +265,19 @@ void* client_thread(void* arg) {
                 }
 
                 printf("Handling CINFO message\n");
-                if (pthread_mutex_lock(&charity_locks[1]) != 0) {
-                    perror("pthread_mutex_lock (CINFO)");
-                    break;
-                }
-                printf("Locked charity_locks[%d] for CINFO\n", message.msgdata.donation.charity);
+                int charity_id_cinfo = message.msgdata.donation.charity;
+                pthread_mutex_lock(&charity_locks[charity_id_cinfo]);
+                printf("Locked charity_locks[%d] for CINFO\n", charity_id_cinfo);
 
-                memcpy(&message.msgdata.charityInfo, &charities[message.msgdata.donation.charity], sizeof(charity_t));
+                memcpy(&message.msgdata.charityInfo, &charities[charity_id_cinfo], sizeof(charity_t));
 
-                if (pthread_mutex_unlock(&charity_locks[1]) != 0) {
-                    perror("pthread_mutex_unlock (CINFO)");
-                    break;
-                }
-                printf("Unlocked charity_locks[%d] for CINFO\n", message.msgdata.donation.charity);
+                pthread_mutex_unlock(&charity_locks[charity_id_cinfo]);
+                printf("Unlocked charity_locks[%d] for CINFO\n", charity_id_cinfo);
 
-                if (pthread_mutex_lock(&log_file_lock) != 0) {
-                    perror("pthread_mutex_lock (log_file)");
-                    break;
-                }
-                fprintf(log_file, "%d CINFO %d\n", client_fd, message.msgdata.donation.charity);
+                pthread_mutex_lock(&log_file_lock);
+                fprintf(log_file, "%d CINFO %d\n", client_fd, charity_id_cinfo);
                 fflush(log_file);
-                if (pthread_mutex_unlock(&log_file_lock) != 0) {
-                    perror("pthread_mutex_unlock (log_file)");
-                    break;
-                }
+                pthread_mutex_unlock(&log_file_lock);
 
                 printf("Sending CINFO response: numDonations=%u, totalDonationAmt=%lu, topDonation=%lu\n",
                        message.msgdata.charityInfo.numDonations,
@@ -300,50 +289,29 @@ void* client_thread(void* arg) {
 
             case TOP:
                 printf("Handling TOP message\n");
-                if (pthread_mutex_lock(&server_stats_lock) != 0) {
-                    perror("pthread_mutex_lock (TOP)");
-                    break;
-                }
+                pthread_mutex_lock(&server_stats_lock);
                 for (int i = 0; i < MAX_DONATIONS; i++) {
                     message.msgdata.maxDonations[i] = maxDonations[i];
                 }
-                if (pthread_mutex_unlock(&server_stats_lock) != 0) {
-                    perror("pthread_mutex_unlock (TOP)");
-                    break;
-                }
+                pthread_mutex_unlock(&server_stats_lock);
 
-                if (pthread_mutex_lock(&log_file_lock) != 0) {
-                    perror("pthread_mutex_lock (log_file)");
-                    break;
-                }
+                pthread_mutex_lock(&log_file_lock);
                 fprintf(log_file, "%d TOP\n", client_fd);
                 fflush(log_file);
-                if (pthread_mutex_unlock(&log_file_lock) != 0) {
-                    perror("pthread_mutex_unlock (log_file)");
-                    break;
-                }
+                pthread_mutex_unlock(&log_file_lock);
 
                 write(client_fd, &message, sizeof(message_t));
                 break;
 
             case LOGOUT:
                 printf("Handling LOGOUT message\n");
-                if (pthread_mutex_lock(&log_file_lock) != 0) {
-                    perror("pthread_mutex_lock (log_file)");
-                    break;
-                }
+                pthread_mutex_lock(&log_file_lock);
                 fprintf(log_file, "%d LOGOUT\n", client_fd);
                 fflush(log_file);
-                if (pthread_mutex_unlock(&log_file_lock) != 0) {
-                    perror("pthread_mutex_unlock (log_file)");
-                    break;
-                }
+                pthread_mutex_unlock(&log_file_lock);
 
                 // Update maxDonations if necessary
-                if (pthread_mutex_lock(&server_stats_lock) != 0) {
-                    perror("pthread_mutex_lock (server_stats)");
-                    break;
-                }
+                pthread_mutex_lock(&server_stats_lock);
                 for (int i = 0; i < MAX_DONATIONS; i++) {
                     if (client_total_donations > maxDonations[i]) {
                         for (int j = MAX_DONATIONS - 1; j > i; j--) {
@@ -353,26 +321,17 @@ void* client_thread(void* arg) {
                         break;
                     }
                 }
-                if (pthread_mutex_unlock(&server_stats_lock) != 0) {
-                    perror("pthread_mutex_unlock (server_stats)");
-                    break;
-                }
+                pthread_mutex_unlock(&server_stats_lock);
 
                 close(client_fd);
                 return NULL;
 
             default:
                 printf("Handling ERROR message\n");
-                if (pthread_mutex_lock(&log_file_lock) != 0) {
-                    perror("pthread_mutex_lock (log_file)");
-                    break;
-                }
+                pthread_mutex_lock(&log_file_lock);
                 fprintf(log_file, "%d ERROR\n", client_fd);
                 fflush(log_file);
-                if (pthread_mutex_unlock(&log_file_lock) != 0) {
-                    perror("pthread_mutex_unlock (log_file)");
-                    break;
-                }
+                pthread_mutex_unlock(&log_file_lock);
 
                 message.msgtype = ERROR;
                 write(client_fd, &message, sizeof(message_t));
@@ -382,6 +341,22 @@ void* client_thread(void* arg) {
 
     close(client_fd);
     return NULL;
+}
+
+void print_stats() {
+    // Lock the statistics mutex to ensure thread safety
+    pthread_mutex_lock(&server_stats_lock);
+
+    // Print charity stats to stdout
+    for (int i = 0; i < CHARITY_COUNT; i++) {
+        printf("%d, %d, %lu, %lu\n", i, charities[i].numDonations, charities[i].topDonation, charities[i].totalDonationAmt);
+    }
+
+    // Print server statistics to stderr
+    fprintf(stderr, "%d\n%lu, %lu, %lu\n", clientCnt, maxDonations[0], maxDonations[1], maxDonations[2]);
+
+    // Unlock the statistics mutex
+    pthread_mutex_unlock(&server_stats_lock);
 }
 
 
