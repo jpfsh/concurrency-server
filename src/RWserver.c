@@ -1,9 +1,119 @@
-#include "server.h"
-#include "protocol.h"
+#define _GNU_SOURCE
 #include <pthread.h>
 #include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <assert.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <arpa/inet.h>
+#include <getopt.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <errno.h>
+#define USAGE_MSG_RW "ZotDonation_RWserver [-h] R_PORT_NUMBER W_PORT_NUMBER LOG_FILENAME"\
+                  "\n  -h                 Displays this help menu and returns EXIT_SUCCESS."\
+                  "\n  R_PORT_NUMBER      Port number to listen on for reader (observer) clients."\
+                  "\n  W_PORT_NUMBER      Port number to listen on for writer (donor) clients."\
+                  "\n  LOG_FILENAME       File to output server actions into. Create/overwrite, if exists\n"
 
-#include "RWHelpers.h"
+int socket_listen_init(int server_port);
+
+// These are the message types for the protocol
+enum msg_types {
+    DONATE,
+    CINFO,
+    TOP,
+    LOGOUT,
+    STATS,
+    ERROR = 0xFF
+};
+
+#define SA struct sockaddr
+
+// Define constants
+#define CHARITY_COUNT 5
+#define MAX_DONATIONS 3
+#define MSG_SIZE 32
+
+// Declarations
+void emptyDeleter() {}
+
+// Node structure for linked list
+typedef struct node {
+    void* data;
+    struct node* next;
+    struct node* prev;
+} node_t;
+
+// Doubly linked list structure
+typedef struct list {
+    node_t* head;
+    int length;
+    int (*comparator)(const void*, const void*);
+    void (*printer)(void*, void*);
+    void (*deleter)(void*);
+} dlist_t;
+
+// Function prototypes
+dlist_t* CreateList(int (*compare)(const void*, const void*), void (*print)(void*, void*), void (*delete)(void*));
+void InsertAtHead(dlist_t* list, void* val_ref);
+
+// Charity structure
+typedef struct {
+    uint64_t totalDonationAmt;
+    uint64_t topDonation;
+    uint32_t numDonations;
+} charity_t;
+
+// Global variables for charity locks
+pthread_mutex_t charity_locks[CHARITY_COUNT];
+
+// Message structure
+typedef struct {
+    uint8_t msgtype;
+    union {
+        uint64_t maxDonations[3];  // For TOP
+        charity_t charityInfo;     // For CINFO response from Server
+        struct {
+            uint8_t charity;
+            uint64_t amount;
+        } donation; // For DONATE & CINFO from client
+        struct {
+            uint8_t charityID_high;
+            uint8_t charityID_low;
+            uint64_t amount_high;
+            uint64_t amount_low;
+        } stats; // For STATS (part 2 only)
+    } msgdata;
+} message_t;
+
+dlist_t* CreateList(int (*compare)(const void*, const void*), void (*print)(void*, void*), void (*delete)(void*)) {
+    dlist_t* list = malloc(sizeof(dlist_t));
+    list->comparator = compare;
+    list->printer = print;
+    list->deleter = delete;
+    list->length = 0;
+    list->head = NULL;
+    return list;
+}
+
+void InsertAtHead(dlist_t* list, void* val_ref) {
+    if (list == NULL) return;
+    node_t* new_node = malloc(sizeof(node_t));
+    new_node->data = val_ref;
+    new_node->next = list->head;
+    new_node->prev = NULL;
+    if (list->head != NULL) {
+        list->head->prev = new_node;
+    }
+    list->head = new_node;
+    list->length++;
+}
 
 /**********************DECLARE ALL LOCKS HERE BETWEEN THES LINES FOR MANUAL GRADING*************/
 
