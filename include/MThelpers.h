@@ -3,8 +3,6 @@
 
 #include "dlinkedlist.h"
 // 
-#define CHARITY_COUNT 5
-#define MAX_DONATIONS 3
 
 extern pthread_mutex_t mt_stats_lock;
 extern pthread_mutex_t log_file_lock;
@@ -28,7 +26,7 @@ void cleanup_server();
 // void init_server(const char* log_filename, dlist_t* list);
 void init_server(const char* log_filename);
 
-void* client_thread(void* arg);
+void* client_handler(void* client);
 void print_stats();
 void sigint_handler(int sig);
 

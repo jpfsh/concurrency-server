@@ -56,7 +56,7 @@ int main(int argc, char *argv[]) {
     struct sigaction myaction = {{0}};
     myaction.sa_handler = sigint_handler;
     if (sigaction(SIGINT, &myaction, NULL) == -1) {
-        perror("signal handler failed to install");
+        printf("signal handler failed to install\n");
         exit(EXIT_FAILURE);
     }
     // endmodif
@@ -98,12 +98,11 @@ int main(int argc, char *argv[]) {
         // Create your new thread.
         // tid_t new_tid = pthread_create(client_function);
         pthread_t tid;
-        int* client_fd_ptr = malloc(sizeof(int));
-        *client_fd_ptr = client_fd;
-        if (pthread_create(&tid, NULL, client_thread, client_fd_ptr) != 0) {
-            perror("pthread_create");
+        int* client_ptr = malloc(sizeof(int));
+        *client_ptr = client_fd;
+        if (pthread_create(&tid, NULL, client_handler, client_ptr) != 0) {
             close(client_fd);
-            free(client_fd_ptr);
+            free(client_ptr);
             continue;
         }
         
