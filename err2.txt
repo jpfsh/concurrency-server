@@ -1,2 +1,0 @@
-Failed to bind socket: Address already in use
-free(): double free detected in tcache 2

@@ -9,7 +9,7 @@
 #include <errno.h>
 dlist_t* list;
 FILE* log_file;
-volatile sig_atomic_t sigint_flag = 0;
+volatile sig_atomic_t sigint = 0;
 // endmodif
 
 /**********************DECLARE ALL LOCKS HERE BETWEEN THES LINES FOR MANUAL GRADING*************/
@@ -76,7 +76,7 @@ int main(int argc, char *argv[]) {
             // 
             // disc
             if (errno == EINTR) {
-                if (sigint_flag) {
+                if (sigint) {
                     // Kill all threads in thread_list, print stats, exit.
                     break;
                 }
@@ -113,10 +113,13 @@ int main(int argc, char *argv[]) {
         // InsertAtHead(thread_list, new_tid);
         
         // Need to see if SIGINT occurred between accept and here.
-        if (sigint_flag) {
+        if (sigint) {
             // Kill all threads in thread_list, print stats, exit.
             break;
         }
+        pthread_mutex_lock(&mt_stats_lock);
+        clientCnt++;
+        pthread_mutex_unlock(&mt_stats_lock);
         // endmodif
     }
     // 

@@ -10,7 +10,7 @@ extern pthread_mutex_t charity_locks[5];
 
 extern dlist_t* list;
 extern FILE* log_file;
-extern volatile sig_atomic_t sigint_flag;
+extern volatile sig_atomic_t sigint;
 
 // Global variables, statistics collected since server start-up
 extern int clientCnt;  // # of client connections made, Updated by the main thread
@@ -40,8 +40,8 @@ void remove_joinable_threads();
 void kill_and_join_all_threads();
 
 #define write_log(fmt, ...)			\
-pthread_mutex_lock(log_file_mutex);	\
+pthread_mutex_lock(&log_file_lock);	\
 fprintf(log_file, fmt, __VA_ARGS__);	\
-pthread_mutex_unlock(log_file_mutex);
+pthread_mutex_unlock(&log_file_lock);
 
 #endif
