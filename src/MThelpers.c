@@ -18,7 +18,7 @@ void init_server(const char* log_filename) {
     for (int i = 0; i < MAX_DONATIONS; i++) {
         maxDonations[i] = 0;
     }
-    pthread_mutex_init(&server_stats_lock, NULL);
+    pthread_mutex_init(&mt_stats_lock, NULL);
 
     for (int i = 0; i < CHARITY_COUNT; i++) {
         charities[i].numDonations = 0;
@@ -42,7 +42,7 @@ void init_server(const char* log_filename) {
 
 void cleanup_server() {
     fclose(log_file);
-    pthread_mutex_destroy(&server_stats_lock);
+    pthread_mutex_destroy(&mt_stats_lock);
     for (int i = 0; i < CHARITY_COUNT; i++) {
         pthread_mutex_destroy(&charity_locks[i]);
     }
@@ -197,11 +197,11 @@ void* client_thread(void* arg) {
 
             case TOP:
                 printf("Handling TOP message\n");
-                pthread_mutex_lock(&server_stats_lock);
+                pthread_mutex_lock(&mt_stats_lock);
                 for (int i = 0; i < MAX_DONATIONS; i++) {
                     message.msgdata.maxDonations[i] = maxDonations[i];
                 }
-                pthread_mutex_unlock(&server_stats_lock);
+                pthread_mutex_unlock(&mt_stats_lock);
 
                 pthread_mutex_lock(&log_file_lock);
                 fprintf(log_file, "%d TOP\n", client_fd);
@@ -219,7 +219,7 @@ void* client_thread(void* arg) {
                 pthread_mutex_unlock(&log_file_lock);
 
                 // Update maxDonations if necessary
-                pthread_mutex_lock(&server_stats_lock);
+                pthread_mutex_lock(&mt_stats_lock);
                 for (int i = 0; i < MAX_DONATIONS; i++) {
                     if (client_total_donations > maxDonations[i]) {
                         for (int j = MAX_DONATIONS - 1; j > i; j--) {
@@ -229,7 +229,7 @@ void* client_thread(void* arg) {
                         break;
                     }
                 }
-                pthread_mutex_unlock(&server_stats_lock);
+                pthread_mutex_unlock(&mt_stats_lock);
 
                 close(client_fd);
                 return NULL;

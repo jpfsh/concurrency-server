@@ -88,7 +88,7 @@ int socket_listen_init(int server_port){
     
     if(setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, (char *)&opt, sizeof(opt))<0)
     {
-        perror("setsockopt");exit(EXIT_FAILURE); 
+    	perror("setsockopt");exit(EXIT_FAILURE); 
     }
 
     // Binding newly created socket to given IP and verification

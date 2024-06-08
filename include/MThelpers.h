@@ -5,9 +5,8 @@
 // 
 #define CHARITY_COUNT 5
 #define MAX_DONATIONS 3
-#define MSG_SIZE 32
 
-extern pthread_mutex_t server_stats_lock;;
+extern pthread_mutex_t mt_stats_lock;
 extern pthread_mutex_t log_file_lock;
 extern pthread_mutex_t charity_locks[5];
 
