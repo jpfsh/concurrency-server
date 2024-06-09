@@ -80,6 +80,7 @@ int main(int argc, char *argv[]) {
                     break;
                 }
                 // Continue to read again.
+                continue;
             } else {
                 // Accept failed for other reason, print error, exit.
                 printf("other reason\n");

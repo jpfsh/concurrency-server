@@ -40,6 +40,7 @@ void cleanup_server() {
     pthread_mutex_destroy(&log_file_lock);
 }
 
+// sync pt 2 slide 11
 void reader_lock() {
     pthread_mutex_lock(&readers_lock);
     readcnt++;

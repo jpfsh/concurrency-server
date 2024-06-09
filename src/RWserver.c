@@ -85,7 +85,7 @@ int main(int argc, char *argv[]) {
                     break;
                 }
                 // Continue to read again.
-                // continue;
+                continue;
             } else {
                 // Accept failed for other reason, print error, exit.
                 printf("Accept failed\n");
@@ -100,14 +100,14 @@ int main(int argc, char *argv[]) {
         // INSERT SERVER ACTIONS FOR CONNECTED READER CLIENT CODE HERE
         // 
         int *reader_fd_ptr = malloc(sizeof(int));
-        if (reader_fd_ptr == NULL) {
+        if (!reader_fd_ptr) {
             exit(EXIT_FAILURE);
         }
         *reader_fd_ptr = reader_fd;
         pthread_t reader_tid;
         pthread_create(&reader_tid, NULL, handle_reader, reader_fd_ptr);
+        // conc prog slide 46, and doc said to not detach for writer
         pthread_detach(reader_tid);
-        // slide 46, but do not detach writer
 
         if (sigint) {
             break;
