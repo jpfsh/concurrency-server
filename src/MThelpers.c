@@ -169,14 +169,15 @@ void* client_handler(void* client) {
             	write_log("%d LOGOUT\n", client_fd);
 
                 pthread_mutex_lock(&mt_stats_lock);
-                for (int i = 0; i < 3; i++) {
-                    if (donation_total > maxDonations[i]) {
-                        for (int j = 2; j > i; j--) {
-                            maxDonations[j] = maxDonations[j - 1];
-                        }
-                        maxDonations[i] = donation_total;
-                        break;
-                    }
+                if (donation_total > maxDonations[0]) {
+                    maxDonations[2] = maxDonations[1];
+                    maxDonations[1] = maxDonations[0];
+                    maxDonations[0] = donation_total;
+                } else if (donation_total > maxDonations[1]) {
+                    maxDonations[2] = maxDonations[1];
+                    maxDonations[1] = donation_total;
+                } else if (donation_total > maxDonations[2]) {
+                    maxDonations[2] = donation_total;
                 }
                 pthread_mutex_unlock(&mt_stats_lock);
 

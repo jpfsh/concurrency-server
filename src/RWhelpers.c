@@ -43,7 +43,8 @@ void cleanup_server() {
 void reader_lock() {
     pthread_mutex_lock(&readers_lock);
     readcnt++;
-    if (readcnt) {
+    // specifically the FIRST one in, not just != 0
+    if (readcnt == 1) {
         pthread_mutex_lock(&writers_lock);
     }
     pthread_mutex_unlock(&readers_lock);
@@ -68,6 +69,13 @@ void writer_unlock() {
 
 void sigint_handler(int sig) {
     sigint = 1;
+}
+
+void print_stats() {
+    for (int i = 0; i < 5; i++) {
+        printf("%d, %u, %lu, %lu\n", i, charities[i].numDonations, charities[i].topDonation, charities[i].totalDonationAmt);
+    }
+    fprintf(stderr, "%d\n%lu, %lu, %lu\n", clientCnt, maxDonations[0], maxDonations[1], maxDonations[2]);
 }
 
 void *handle_writer(void *ptr) {
@@ -103,6 +111,7 @@ void *handle_writer(void *ptr) {
         pthread_mutex_lock(&client_cnt_lock);
         clientCnt++;
         pthread_mutex_unlock(&client_cnt_lock);
+        donation_total = 0; 
         
         while ((read(writer_fd, &msg, sizeof(msg))) > 0) {
         
@@ -123,7 +132,7 @@ void *handle_writer(void *ptr) {
                         donation_total += msg.msgdata.donation.amount;
                         writer_unlock();
 
-                        write_log("%d DONATE %lu %lu\n", writer_fd, (unsigned long)which_charity, msg.msgdata.donation.amount);
+                        write_log("%d DONATE %lu %lu\n", writer_fd, (unsigned long) which_charity, msg.msgdata.donation.amount);
                         write(writer_fd, &msg, sizeof(msg));
                     }
                     break;
@@ -131,30 +140,33 @@ void *handle_writer(void *ptr) {
                 case LOGOUT: 
                     // "act like a reader"
                     reader_lock();
-                    update = false;
+                    pthread_mutex_lock(&max_donations_lock);
                     for (int i = 0; i < 3; ++i) {
                         if (maxDonations[i] < donation_total) {
                             update = true;
                             break;
                         }
                     }
-                    reader_unlock();
-
                     if (update) {
-                        writer_lock();
-                        for (int i = 0; i < 3; ++i) {
-                            if (maxDonations[i] < donation_total) {
-                                maxDonations[i] = donation_total;
-                                break;
-                            }
+                        if (donation_total > maxDonations[0]) {
+                            maxDonations[2] = maxDonations[1];
+                            maxDonations[1] = maxDonations[0];
+                            maxDonations[0] = donation_total;
+                        } else if (donation_total > maxDonations[1]) {
+                            maxDonations[2] = maxDonations[1];
+                            maxDonations[1] = donation_total;
+                        } else if (donation_total > maxDonations[2]) {
+                            maxDonations[2] = donation_total;
                         }
-                        writer_unlock();
                     }
+                    pthread_mutex_unlock(&max_donations_lock);
+                    reader_unlock();
 
                     write_log("%d LOGOUT\n", writer_fd);
                     write(writer_fd, &msg, sizeof(msg));
                     close(writer_fd);
-                    return NULL;
+                    // return NULL;
+                    break;
 
                 default: 
                     error = true;
@@ -166,10 +178,6 @@ void *handle_writer(void *ptr) {
                 write(writer_fd, &msg, sizeof(message_t));
             }
         }
-
-        // pthread_mutex_lock(&client_cnt_lock);
-        // clientCnt++;
-        // pthread_mutex_unlock(&client_cnt_lock);
 
         close(writer_fd);
         if (sigint) {
@@ -183,13 +191,8 @@ void *handle_writer(void *ptr) {
 
 void *handle_reader(void *ptr) {
     int reader_fd = *(int *) ptr;
-    // int reader_fd = *(int *) ptr;
     message_t msg;
     bool error = false;
-
-    pthread_mutex_lock(&client_cnt_lock);
-    clientCnt++;
-    pthread_mutex_unlock(&client_cnt_lock);
 
     while ((read(reader_fd, &msg, sizeof(msg))) > 0) {
         uint64_t which_charity = msg.msgdata.donation.charity;
@@ -201,8 +204,8 @@ void *handle_reader(void *ptr) {
                 }
                 reader_lock();
                 memcpy(&msg.msgdata.charityInfo, &charities[which_charity], sizeof(charity_t));
-                reader_unlock();
                 write(reader_fd, &msg, sizeof(msg));
+                reader_unlock();
                 write_log("%d CINFO %lu\n", reader_fd, (unsigned long)which_charity);
                 break;
 
@@ -212,35 +215,35 @@ void *handle_reader(void *ptr) {
                 for (int i = 0; i < 3; i++) {
                     msg.msgdata.maxDonations[i] = maxDonations[i];
                 }
-                write(reader_fd, &msg, sizeof(message_t));
                 pthread_mutex_unlock(&max_donations_lock);
+                write(reader_fd, &msg, sizeof(message_t));
                 reader_unlock();
                 write_log("%d TOP\n", reader_fd);
                 break;
 
             case STATS:
                 reader_lock();
-                uint64_t max_amt = 0; 
-                uint64_t min_amt = UINT64_MAX;
-                int max_charity = 0, min_charity = 0;
+                uint64_t amt_high = 0; 
+                uint64_t amt_low = UINT64_MAX;
+                int charity_high = 0, charity_low = 0;
                 for (int i = 0; i < 5; ++i) {
-                    if (charities[i].totalDonationAmt > max_amt) {
-                        max_amt = charities[i].totalDonationAmt;
-                        max_charity = i;
+                    if (charities[i].totalDonationAmt > amt_high) {
+                        amt_high = charities[i].totalDonationAmt;
+                        charity_high = i;
                     }
-                    if (charities[i].totalDonationAmt < min_amt) {
-                        min_amt = charities[i].totalDonationAmt;
-                        min_charity = i;
+                    if (charities[i].totalDonationAmt < amt_low) {
+                        amt_low = charities[i].totalDonationAmt;
+                        charity_low = i;
                     }
                 }
-                msg.msgdata.stats.charityID_high = max_charity;
-                msg.msgdata.stats.charityID_low = min_charity;
-                msg.msgdata.stats.amount_high = max_amt;
-                msg.msgdata.stats.amount_low = min_amt;
+                msg.msgdata.stats.charityID_high = charity_high;
+                msg.msgdata.stats.charityID_low = charity_low;
+                msg.msgdata.stats.amount_high = amt_high;
+                msg.msgdata.stats.amount_low = amt_low;
+                write(reader_fd, &msg, sizeof(msg));
                 reader_unlock();
 
-                write(reader_fd, &msg, sizeof(msg));
-                write_log("%d STATS %d:%lu %d:%lu\n", reader_fd, max_charity, max_amt, min_charity, min_amt);
+                write_log("%d STATS %d:%lu %d:%lu\n", reader_fd, charity_high, amt_high, charity_low, amt_low);
                 break;
 
             case LOGOUT: 
@@ -261,11 +264,4 @@ void *handle_reader(void *ptr) {
     }
     close(reader_fd);
     return NULL;
-}
-
-void print_stats() {
-    for (int i = 0; i < 5; i++) {
-        printf("%d, %u, %lu, %lu\n", i, charities[i].numDonations, charities[i].topDonation, charities[i].totalDonationAmt);
-    }
-    fprintf(stderr, "%d\n%lu, %lu, %lu\n", clientCnt, maxDonations[0], maxDonations[1], maxDonations[2]);
 }

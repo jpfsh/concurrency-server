@@ -85,7 +85,7 @@ int main(int argc, char *argv[]) {
                     break;
                 }
                 // Continue to read again.
-                continue;
+                // continue;
             } else {
                 // Accept failed for other reason, print error, exit.
                 printf("Accept failed\n");
@@ -93,16 +93,21 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        // pthread_mutex_lock(&client_cnt_lock);
-        // clientCnt++;
-        // pthread_mutex_unlock(&client_cnt_lock);
+        pthread_mutex_lock(&client_cnt_lock);
+        clientCnt++;
+        pthread_mutex_unlock(&client_cnt_lock);
 
         // INSERT SERVER ACTIONS FOR CONNECTED READER CLIENT CODE HERE
         // 
+        int *reader_fd_ptr = malloc(sizeof(int));
+        if (reader_fd_ptr == NULL) {
+            exit(EXIT_FAILURE);
+        }
+        *reader_fd_ptr = reader_fd;
         pthread_t reader_tid;
-        pthread_create(&reader_tid, NULL, handle_reader, (void *) &reader_fd);
-        // slide 46
-        pthread_detach(pthread_self());
+        pthread_create(&reader_tid, NULL, handle_reader, reader_fd_ptr);
+        pthread_detach(reader_tid);
+        // slide 46, but do not detach writer
 
         if (sigint) {
             break;
