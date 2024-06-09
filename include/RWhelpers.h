@@ -30,8 +30,8 @@ void reader_lock();
 void reader_unlock();
 void writer_lock();
 void writer_unlock();
-void *handle_writer(void *ptr);
-void *handle_reader(void *ptr);
+void *handle_writer(void *vargp);
+void *handle_reader(void *vargp);
 void print_stats();
 void sigint_handler(int sig);
 

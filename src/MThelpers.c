@@ -95,9 +95,9 @@ void print_stats() {
 }
 
 // 
-void* client_handler(void* client) {
-    int client_fd = *((int*) client);
-    free(client);
+void* client_handler(void* vargp) {
+    int client_fd = *((int*) vargp);
+    free(vargp);
 
     bool error = false;
     message_t msg;

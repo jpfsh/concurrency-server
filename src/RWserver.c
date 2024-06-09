@@ -100,9 +100,6 @@ int main(int argc, char *argv[]) {
         // INSERT SERVER ACTIONS FOR CONNECTED READER CLIENT CODE HERE
         // 
         int *reader_fd_ptr = malloc(sizeof(int));
-        if (!reader_fd_ptr) {
-            exit(EXIT_FAILURE);
-        }
         *reader_fd_ptr = reader_fd;
         pthread_t reader_tid;
         pthread_create(&reader_tid, NULL, handle_reader, reader_fd_ptr);
@@ -120,6 +117,7 @@ int main(int argc, char *argv[]) {
     pthread_join(writer_tid, NULL);
     print_stats();
     cleanup_server();
+    // endmodif
     return 0;
 }
 

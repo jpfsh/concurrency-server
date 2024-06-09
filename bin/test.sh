@@ -110,7 +110,7 @@ EOF
 $RW_SERVER $R_PORT $W_PORT $RW_SERVER_LOG &
 
 # Give the RWserver some time to start
-sleep 2
+#sleep 2 
 
 # Run the RWserver scenarios 100 times each
 for i in {1..100}; do

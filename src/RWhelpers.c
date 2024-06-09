@@ -9,6 +9,7 @@
 #include <errno.h>
 
 void init_server(const char* log_filename) {
+    // sync pt 2 slide 40
     pthread_mutex_init(&client_cnt_lock, NULL);
     pthread_mutex_init(&max_donations_lock, NULL);
     for (int i = 0; i < 3; ++i) {
@@ -79,8 +80,9 @@ void print_stats() {
     fprintf(stderr, "%d\n%lu, %lu, %lu\n", clientCnt, maxDonations[0], maxDonations[1], maxDonations[2]);
 }
 
-void *handle_writer(void *ptr) {
-    int writer_listen_fd = *(int *) ptr;
+void *handle_writer(void *vargp) {
+    int writer_listen_fd = *(int *) vargp;
+    // free(vargp);
     bool error = false;
     uint64_t donation_total = 0;
     message_t msg;
@@ -107,7 +109,6 @@ void *handle_writer(void *ptr) {
                 printf("other reason\n");
                 exit(EXIT_FAILURE);
             }
-            // endmodif
         }
         pthread_mutex_lock(&client_cnt_lock);
         clientCnt++;
@@ -190,8 +191,9 @@ void *handle_writer(void *ptr) {
     return NULL;
 }
 
-void *handle_reader(void *ptr) {
-    int reader_fd = *(int *) ptr;
+void *handle_reader(void *vargp) {
+    int reader_fd = *(int *) vargp;
+    free(vargp);
     message_t msg;
     bool error = false;
 

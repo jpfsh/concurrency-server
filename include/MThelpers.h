@@ -26,7 +26,7 @@ void cleanup_server();
 // void init_server(const char* log_filename, dlist_t* list);
 void init_server(const char* log_filename);
 
-void* client_handler(void* client);
+void* client_handler(void* vargp);
 void print_stats();
 void sigint_handler(int sig);
 
