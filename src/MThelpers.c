@@ -6,7 +6,8 @@
 
 #include "MThelpers.h"
 
-void emptyDeleter() {}
+// for dlist
+void EmptyDeleter() {}
 
 void sigint_handler(int sig) {
     sigint = 1;
@@ -24,20 +25,20 @@ void init_server(const char* log_filename) {
         charities[i].numDonations = 0;
         charities[i].totalDonationAmt = 0;
         charities[i].topDonation = 0;
-        if (pthread_mutex_init(&charity_locks[i], NULL) != 0) {
-            perror("mutex init err");
+        if (pthread_mutex_init(&charity_locks[i], NULL)) {
+            printf("mutex init err\n");
             exit(EXIT_FAILURE);
         }
     }
 
     log_file = fopen(log_filename, "w");
     if (log_file == NULL) {
-        perror("log fopen err");
+        printf("log fopen err\n");
         exit(EXIT_FAILURE);
     }
     pthread_mutex_init(&log_file_lock, NULL);
 
-    list = CreateList(NULL, NULL, emptyDeleter);
+    list = CreateList(NULL, NULL, EmptyDeleter);
 }
 
 void cleanup_server() {
@@ -54,17 +55,17 @@ void remove_joinable_threads() {
     node_t* walker = list->head;
     while (walker) {
         pthread_t tid = *(pthread_t*) walker->data;
-        if (pthread_tryjoin_np(tid, NULL) == 0) {
+        if (!pthread_tryjoin_np(tid, NULL)) {
             node_t* temp = walker;
             walker = walker->next;
-            if (temp->prev) {
-                temp->prev->next = temp->next;
+            if (list->head == temp) {
+                list->head = temp->next;
             }
             if (temp->next) {
                 temp->next->prev = temp->prev;
             }
-            if (list->head == temp) {
-                list->head = temp->next;
+            if (temp->prev) {
+                temp->prev->next = temp->next;
             }
             list->length--;
             free(temp->data);
@@ -102,7 +103,7 @@ void* client_handler(void* client) {
     message_t message;
     uint64_t donation_total = 0;
 
-    while (read(client_fd, &message, sizeof(message_t)) > 0) {
+    while (read(client_fd, &message, sizeof(message_t))) {
     	int which_charity = message.msgdata.donation.charity;
         switch (message.msgtype) {
             case DONATE:

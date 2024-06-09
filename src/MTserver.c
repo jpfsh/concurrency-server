@@ -4,6 +4,7 @@
 #include <signal.h>
 
 // empty comment lines indicate the start of my modification blocks
+// my variables are attempted to be kept as non-camelcase
 // 
 #include "MThelpers.h"
 #include <errno.h>
@@ -13,8 +14,6 @@ volatile sig_atomic_t sigint = 0;
 // endmodif
 
 /**********************DECLARE ALL LOCKS HERE BETWEEN THES LINES FOR MANUAL GRADING*************/
-// pthread_mutex_t mt_stats_lock = PTHREAD_MUTEX_INITIALIZER;
-// pthread_mutex_t log_file_lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t mt_stats_lock;
 pthread_mutex_t log_file_lock;
 // fine grain locking
@@ -100,26 +99,25 @@ int main(int argc, char *argv[]) {
         pthread_t tid;
         int* client_ptr = malloc(sizeof(int));
         *client_ptr = client_fd;
-        if (pthread_create(&tid, NULL, client_handler, client_ptr) != 0) {
+        if (pthread_create(&tid, NULL, client_handler, client_ptr)) {
             close(client_fd);
             free(client_ptr);
-            continue;
+        } else {
+            // Put new_tid into the thread_list.
+            pthread_t* new_tid = malloc(sizeof(pthread_t));
+            *new_tid = tid;
+            InsertAtHead(list, new_tid);
+            
+            pthread_mutex_lock(&mt_stats_lock);
+            clientCnt++;
+            pthread_mutex_unlock(&mt_stats_lock);
         }
-        
-        // Put new_tid into the thread_list.
-        pthread_t* tid_ptr = malloc(sizeof(pthread_t));
-        *tid_ptr = tid;
-        InsertAtHead(list, tid_ptr);
-        // InsertAtHead(thread_list, new_tid);
-        
+
         // Need to see if SIGINT occurred between accept and here.
         if (sigint) {
             // Kill all threads in thread_list, print stats, exit.
             break;
         }
-        pthread_mutex_lock(&mt_stats_lock);
-        clientCnt++;
-        pthread_mutex_unlock(&mt_stats_lock);
         // endmodif
     }
     // 
