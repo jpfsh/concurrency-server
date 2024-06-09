@@ -16,7 +16,6 @@ extern FILE *log_file;
 extern volatile sig_atomic_t sigint;
 
 extern int writer_fd;
-extern pthread_t writer_tid;
 
 // Global variables, statistics collected since server start-up
 extern int clientCnt;  // # of client connections made, Updated by the main thread

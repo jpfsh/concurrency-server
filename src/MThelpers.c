@@ -100,22 +100,20 @@ void* client_handler(void* client) {
     free(client);
 
     bool error = false;
-    message_t message;
+    message_t msg;
     uint64_t donation_total = 0;
 
-    while (read(client_fd, &message, sizeof(message_t))) {
-    	int which_charity = message.msgdata.donation.charity;
-        switch (message.msgtype) {
+    while (read(client_fd, &msg, sizeof(message_t))) {
+    	int which_charity = msg.msgdata.donation.charity;
+        switch (msg.msgtype) {
             case DONATE:
                 if (which_charity >= 5) {
-                    message.msgtype = ERROR;
                     error = true;
-                    write(client_fd, &message, sizeof(message_t));
                 } else {
 	                pthread_mutex_lock(&charity_locks[which_charity]);
 
 	                printf("donate: locked %d\n", which_charity);
-	                uint64_t amt = message.msgdata.donation.amount;
+	                uint64_t amt = msg.msgdata.donation.amount;
 	                charities[which_charity].numDonations++;
 	                charities[which_charity].totalDonationAmt += amt;
 	                if (amt > charities[which_charity].topDonation) {
@@ -131,19 +129,17 @@ void* client_handler(void* client) {
 	                fprintf(log_file, "%d DONATE %d %lu\n", client_fd, which_charity, amt);
 	                pthread_mutex_unlock(&log_file_lock);
 
-	                write(client_fd, &message, sizeof(message_t));
+	                write(client_fd, &msg, sizeof(message_t));
                 }
                 break;
             case CINFO:
                 if (which_charity >= 5) {
-                    message.msgtype = ERROR;
                     error = true;
-                    write(client_fd, &message, sizeof(message_t));
                 } else {
 	                pthread_mutex_lock(&charity_locks[which_charity]);
 	                printf("cinfo: locked %d\n", which_charity);
 
-	                memcpy(&message.msgdata.charityInfo, &charities[which_charity], sizeof(charity_t));
+	                memcpy(&msg.msgdata.charityInfo, &charities[which_charity], sizeof(charity_t));
 
 	                pthread_mutex_unlock(&charity_locks[which_charity]);
 	                printf("cinfo: unlocked locked %d\n", which_charity);
@@ -152,21 +148,21 @@ void* client_handler(void* client) {
 	                fprintf(log_file, "%d CINFO %d\n", client_fd, which_charity);
 	                pthread_mutex_unlock(&log_file_lock);
 
-	                write(client_fd, &message, sizeof(message_t));
+	                write(client_fd, &msg, sizeof(message_t));
                 }
                 break;
             case TOP:
                 pthread_mutex_lock(&mt_stats_lock);
                 printf("locked top\n");
                 for (int i = 0; i < 3; i++) {
-                    message.msgdata.maxDonations[i] = maxDonations[i];
+                    msg.msgdata.maxDonations[i] = maxDonations[i];
                 }
                 pthread_mutex_unlock(&mt_stats_lock);
                 printf("unlocked top\n");
 
                 write_log("%d TOP\n", client_fd);
 
-                write(client_fd, &message, sizeof(message_t));
+                write(client_fd, &msg, sizeof(message_t));
                 break;
 
             case LOGOUT:
@@ -193,9 +189,8 @@ void* client_handler(void* client) {
         }
         if (error) {
     	    write_log("%d ERROR\n", client_fd);
-
-            message.msgtype = ERROR;
-            write(client_fd, &message, sizeof(message_t));
+            msg.msgtype = ERROR;
+            write(client_fd, &msg, sizeof(message_t));
         }
     }
 

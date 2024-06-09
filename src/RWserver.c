@@ -11,7 +11,6 @@ FILE* log_file;
 volatile sig_atomic_t sigint = 0;
 int readcnt = 0;
 int writer_fd;
-pthread_t writer_tid;
 // endmodif
 
 /**********************DECLARE ALL LOCKS HERE BETWEEN THES LINES FOR MANUAL GRADING*************/
@@ -52,12 +51,6 @@ int main(int argc, char *argv[]) {
 
     // INSERT SERVER INITIALIZATION CODE HERE
     // 
-    log_file = fopen(log_filename, "w");
-    if (log_file == NULL) {
-        perror("fopen");
-        exit(EXIT_FAILURE);
-    }
-
     init_server(log_filename);
 
     struct sigaction myaction = {{0}};
@@ -68,6 +61,7 @@ int main(int argc, char *argv[]) {
     }
 
     // CREATE WRITER THREAD HERE
+    pthread_t writer_tid;
     writer_fd = socket_listen_init(w_port_number);
     pthread_create(&writer_tid, NULL, handle_writer, &writer_fd);
     printf("Listening for writers on port %d.\n", w_port_number);
@@ -99,22 +93,16 @@ int main(int argc, char *argv[]) {
             }
         }
 
+        // pthread_mutex_lock(&client_cnt_lock);
+        // clientCnt++;
+        // pthread_mutex_unlock(&client_cnt_lock);
+
         // INSERT SERVER ACTIONS FOR CONNECTED READER CLIENT CODE HERE
         // 
-        // pthread_t reader_tid;
-        // pthread_create(&reader_tid, NULL, handle_reader, (void *)(intptr_t)reader_fd);
-        
         pthread_t reader_tid;
         pthread_create(&reader_tid, NULL, handle_reader, (void *) &reader_fd);
-        // pthread_create(&reader_tid, NULL, handle_reader, (void *)(long)reader_fd);
-        // pthread_detach(reader_tid);
-
         // slide 46
         pthread_detach(pthread_self());
-
-        pthread_mutex_lock(&client_cnt_lock);
-        clientCnt++;
-        pthread_mutex_unlock(&client_cnt_lock);
 
         if (sigint) {
             break;
@@ -123,7 +111,6 @@ int main(int argc, char *argv[]) {
     }
 
     close(reader_listen_fd);
-    close(writer_fd);
     pthread_cancel(writer_tid);
     pthread_join(writer_tid, NULL);
     print_stats();
