@@ -1,5 +1,17 @@
 
 
+# zotdonate: a small-scale charity-donation server 
+Two versions: 
+1) A multi-threaded, charity/donation server. The first version handles each of the client (donor) with a thread. All threads interact with the shared data structures. 
+2) The second version utilizes a readers-writer model (reader preference).
+
+- Note: corresponding client programs are pre-provided binaries (in ./bin/) rather than programmed ones. 
+
+# Testing everything for thread-safe code (preferably run test.sh in multiple terminal panes/sessions at once):
+```
+./test.sh
+```
+
 # Part 1 - Multi-threaded Server
 
 
@@ -12,6 +24,13 @@
 -h                 Displays this help menu and returns EXIT_SUCCESS
 PORT_NUMBER        Port number to listen on
 LOG_FILENAME       File to output server actions into. Create/overwrite, if exists
+```
+
+Example:
+```
+$ ./bin/ZotDonate_MTserver 3200 4000 log. txt 2> err. txt
+Listening for readers on port 3200.
+Listening for writers on port 4000.
 ```
 
 
@@ -164,8 +183,7 @@ SERVER_PORT        The port to connect to
 
 
 
-#  \
-Part 2 - Readers-Writer Server  - Client
+# Part 2 - Readers-Writer Server  - Client
 
 
 ```
