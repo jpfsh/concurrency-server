@@ -3,23 +3,20 @@
 #include <pthread.h>
 #include <signal.h>
 
-// empty comment lines indicate the start of my modification blocks
-// 
 #include "RWhelpers.h"
 #include <errno.h>
 FILE* log_file;
 volatile sig_atomic_t sigint = 0;
 int readcnt = 0;
 int writer_fd;
-// endmodif
 
-/**********************DECLARE ALL LOCKS HERE BETWEEN THES LINES FOR MANUAL GRADING*************/
+/********************** LOCKS *************/
 pthread_mutex_t client_cnt_lock;
 pthread_mutex_t max_donations_lock;
 pthread_mutex_t readers_lock;
 pthread_mutex_t writers_lock;
 pthread_mutex_t log_file_lock;
-/***********************************************************************************************/
+/******************************************/
 
 // Global variables, statistics collected since server start-up
 int clientCnt = 0;  // # of client connections made, Updated by the main thread
@@ -49,8 +46,7 @@ int main(int argc, char *argv[]) {
     unsigned int w_port_number = atoi(argv[2]);
     char *log_filename = argv[3];
 
-    // INSERT SERVER INITIALIZATION CODE HERE
-    // 
+    // SERVER INITIALIZATION
     init_server(log_filename);
 
     struct sigaction myaction = {{0}};
@@ -60,12 +56,11 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    // CREATE WRITER THREAD HERE
+    // WRITER THREAD CREATION
     pthread_t writer_tid;
     writer_fd = socket_listen_init(w_port_number);
     pthread_create(&writer_tid, NULL, handle_writer, &writer_fd);
     printf("Listening for writers on port %d.\n", w_port_number);
-    // endmodif
 
     // Initiate server socket for listening for reader clients
     int reader_listen_fd = socket_listen_init(r_port_number); 
@@ -97,19 +92,16 @@ int main(int argc, char *argv[]) {
         clientCnt++;
         pthread_mutex_unlock(&client_cnt_lock);
 
-        // INSERT SERVER ACTIONS FOR CONNECTED READER CLIENT CODE HERE
-        // 
+        // SERVER ACTIONS FOR CONNECTED READER CLIENT
         int *reader_fd_ptr = malloc(sizeof(int));
         *reader_fd_ptr = reader_fd;
         pthread_t reader_tid;
         pthread_create(&reader_tid, NULL, handle_reader, reader_fd_ptr);
-        // conc prog slide 46, and doc said to not detach for writer
         pthread_detach(reader_tid);
 
         if (sigint) {
             break;
         }
-        // endmodif
     }
 
     close(reader_listen_fd);
@@ -117,7 +109,6 @@ int main(int argc, char *argv[]) {
     pthread_join(writer_tid, NULL);
     print_stats();
     cleanup_server();
-    // endmodif
     return 0;
 }
 

@@ -3,22 +3,18 @@
 #include <pthread.h>
 #include <signal.h>
 
-// empty comment lines indicate the start of my modification blocks
-// my variables are attempted to be kept as non-camelcase
-// 
 #include "MThelpers.h"
 #include <errno.h>
 dlist_t* list;
 FILE* log_file;
 volatile sig_atomic_t sigint = 0;
-// endmodif
 
-/**********************DECLARE ALL LOCKS HERE BETWEEN THES LINES FOR MANUAL GRADING*************/
+/********************** LOCKS *************/
 pthread_mutex_t mt_stats_lock;
 pthread_mutex_t log_file_lock;
 // fine grain locking
 pthread_mutex_t charity_locks[5];
-/***********************************************************************************************/
+/******************************************/
 
 
 // Global variables, statistics collected since server start-up
@@ -49,8 +45,7 @@ int main(int argc, char *argv[]) {
     char *log_filename = argv[2];
 
 
-    // INSERT SERVER INITIALIZATION CODE HERE
-    // 
+    // SERVER INITIALIZATION CODE 
     init_server(log_filename);
     struct sigaction myaction = {{0}};
     myaction.sa_handler = sigint_handler;
@@ -58,7 +53,6 @@ int main(int argc, char *argv[]) {
         printf("signal handler failed to install\n");
         exit(EXIT_FAILURE);
     }
-    // endmodif
 
     // Initiate server socket for listening
     int listen_fd = socket_listen_init(port_number);
@@ -72,8 +66,6 @@ int main(int argc, char *argv[]) {
         client_fd = accept(listen_fd, (SA*)&client_addr, &client_addr_len);
         if (client_fd < 0) {
             printf("server acccept failed\n");
-            // 
-            // disc
             if (errno == EINTR) {
                 if (sigint) {
                     // Kill all threads in thread_list, print stats, exit.
@@ -86,11 +78,8 @@ int main(int argc, char *argv[]) {
                 printf("other reason\n");
                 exit(EXIT_FAILURE);
             }
-            // endmodif
         }
 
-        // INSERT SERVER ACTIONS FOR CONNECTED CLIENT CODE HERE
-        // 
         // Call the helper function you made to join terminated threads.
         remove_joinable_threads();
         
@@ -118,13 +107,11 @@ int main(int argc, char *argv[]) {
             // Kill all threads in thread_list, print stats, exit.
             break;
         }
-        // endmodif
     }
-    // 
+
     kill_and_join_all_threads();
     cleanup_server();
     print_stats();
-    // endmodif
     close(listen_fd);
     return 0;
 }

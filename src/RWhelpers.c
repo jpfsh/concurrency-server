@@ -9,7 +9,6 @@
 #include <errno.h>
 
 void init_server(const char* log_filename) {
-    // sync pt 2 slide 40
     pthread_mutex_init(&client_cnt_lock, NULL);
     pthread_mutex_init(&max_donations_lock, NULL);
     for (int i = 0; i < 3; ++i) {
@@ -41,7 +40,6 @@ void cleanup_server() {
     pthread_mutex_destroy(&log_file_lock);
 }
 
-// sync pt 2 slide 11
 void reader_lock() {
     pthread_mutex_lock(&readers_lock);
     readcnt++;
