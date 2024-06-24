@@ -11,7 +11,8 @@ Two versions:
 ```
 ./test.sh
 ```
--  (preferably run test.sh in multiple terminal panes/sessions at once)
+-  (preferably run test.sh in multiple terminal panes/sessions at once to stress-test concurrency and such)
+
 # Part 1 - Multi-threaded Server
 
 
