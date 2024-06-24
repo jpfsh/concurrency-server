@@ -7,11 +7,11 @@ Two versions:
 
 - Note: corresponding client programs are pre-provided binaries (in ./bin/) rather than programmed ones. 
 
-# Testing everything for thread-safe code (preferably run test.sh in multiple terminal panes/sessions at once):
+# Testing everything for thread-safe code:
 ```
 ./test.sh
 ```
-
+-  (preferably run test.sh in multiple terminal panes/sessions at once)
 # Part 1 - Multi-threaded Server
 
 
